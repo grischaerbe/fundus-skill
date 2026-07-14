@@ -1,6 +1,6 @@
 ---
 name: fundus
-description: Use Fundus to import, organize, process, validate, preload, and render production assets in Svelte 5 mobile app projects. Use when working with Fundus setup, fundus.config.ts, asset libraries, images, slices, video, chroma-key video, audio, manifests, generated modules, the Fundus CLI or editor, runtime components, asset delivery budgets, or preload lifecycles.
+description: Use Fundus to import, organize, process, validate, preload, and render production assets in Svelte 5 mobile app projects that already declare Fundus, contain fundus.config.ts, or are explicitly adopting Fundus. Use for Fundus setup, asset libraries, images, slices, video, chroma-key video, audio, manifests, generated modules, the Fundus CLI or editor, runtime components, delivery budgets, and preload lifecycles.
 ---
 
 # Fundus
@@ -11,10 +11,13 @@ Manage a Svelte mobile app's production assets through Fundus while preserving i
 
 Run Fundus commands from the host project root, next to `fundus.config.ts`.
 
-1. Check whether `fundus.config.ts` exists.
-2. If it exists, inspect the complete project state with `npx fundus state --json`.
-3. If it does not exist and the user wants Fundus initialized, run `npx fundus init --json` once.
-4. Read focused command help before using unfamiliar or version-sensitive flags, for example `npx fundus asset ingest --help`.
+1. Detect the host package manager from its lockfile. Confirm Node.js 20.19 or newer, Svelte 5, and a runtime dependency on `fundus` before executing the CLI.
+2. If Fundus is missing and the user explicitly requested setup, install it with the host package manager, for example `npm install fundus`. Do not rely on an executor downloading Fundus temporarily.
+3. Use the package manager's local-only runner for every command. With npm, use `npm exec --no -- fundus`; `--no` prevents a missing local package from falling back to a registry download.
+4. Inspect `fundus.config.ts` before running it because it is executable TypeScript.
+5. If the config exists, inspect project state with `npm exec --no -- fundus state --json`. For a large library, capture the JSON in a temporary file outside the repository and use `jq` to read only the assets or manifests relevant to the task.
+6. If the config does not exist and setup was requested, run `npm exec --no -- fundus init --json` once after installation.
+7. Read focused command help before using unfamiliar or version-sensitive flags, for example `npm exec --no -- fundus asset ingest --help`.
 
 Use JSON output for agent-driven work. Treat the installed CLI's help and JSON responses as the authoritative contract.
 
@@ -24,17 +27,19 @@ Use JSON output for agent-driven work. Treat the installed CLI's help and JSON r
 - Never hand-edit processed proxies or generated manifest modules. Change their inputs and regenerate them.
 - Prefer stable asset IDs. Use `asset replace` when the source file changes but the asset's identity and metadata should remain intact.
 - Use Fundus CLI mutations instead of editing the library JSON directly. Mutations validate, persist, process affected assets, and regenerate manifests as one operation.
-- Inspect references before renaming or deleting assets. Do not perform destructive asset, folder, or manifest deletion unless the user requested it.
-- Run `npx fundus check --json` after changes. Run `npx fundus build --json` first when files, configuration, or generated output may be stale.
-- Report warnings, validation issues, and any host imports that require manual updates.
+- Inspect Fundus references and search host source before renaming or deleting an asset or manifest. Update generated-module imports, manifest export names, and typed asset-property usages in the same task.
+- Do not perform destructive asset, folder, or manifest deletion unless the user requested it.
+- Run `npm exec --no -- fundus check --json` after changes. Run `npm exec --no -- fundus build --json` first when files, configuration, or generated output may be stale.
+- Report warnings and validation issues. Do not leave known host import or type errors for the user to repair manually.
 
 ## Design for mobile delivery
 
 - Treat manifests as delivery units and preload groups, not merely folders.
 - Group assets by the screen, route, overlay, or interaction flow that needs them. Avoid one catch-all manifest when it inflates startup cost.
-- Inspect manifest membership and `deliveredBytes` with `npx fundus manifest list --json`.
+- Record manifest membership and `deliveredBytes` before and after delivery changes with `npm exec --no -- fundus manifest list --json`; report the byte delta.
 - Account for passive members pulled into a manifest through asset references.
-- Preload a manifest shortly before its screen or flow becomes interactive. Release it when its assets are no longer needed and no other active flow depends on it.
+- Give each preloaded manifest one lifecycle owner. Multiple `preload()` calls on the same generated manifest do not create independent holds, so never let repeated component instances each call `release()` independently.
+- Preload shortly before a screen or flow becomes interactive, handle rejection explicitly, and release only after the final consumer is gone.
 - Prefer `Slice` for stretchable mobile UI surfaces instead of shipping multiple fixed-size variants.
 - Keep original source quality in raw assets and tune delivered proxies through Fundus parameters and presets.
 
@@ -48,7 +53,7 @@ Read [references/cli.md](references/cli.md) before ingesting, mutating, organizi
 
 ## Finish the task
 
-1. Run `npx fundus check --json`.
+1. Run `npm exec --no -- fundus check --json`.
 2. Run the host project's relevant typecheck, tests, or build when generated imports or runtime rendering changed.
-3. Review the diff for raw assets, the library, proxies, and generated modules.
+3. Run `git status --short --untracked-files=all` before reviewing the diff so new raw assets and generated files are included. Review the library, proxies, and generated modules as well as tracked changes.
 4. Summarize changed asset IDs, manifest membership, delivered-size impact, warnings, and checks run.
