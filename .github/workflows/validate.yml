@@ -1,0 +1,56 @@
+name: Validate skill
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    env:
+      DISABLE_TELEMETRY: "1"
+      FUNDUS_VERSION: "0.1.0"
+      SKILLS_VERSION: "1.5.17"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.0"
+
+      - name: Verify skill discovery
+        run: |
+          npx --yes "skills@$SKILLS_VERSION" add . --list | tee /tmp/skills-list.txt
+          grep -q "fundus" /tmp/skills-list.txt
+          npx --yes "skills@$SKILLS_VERSION" use . --skill fundus | grep -q "Use the following SKILL.md"
+
+      - name: Verify documented Fundus commands
+        shell: bash
+        run: |
+          commands=(
+            "state --help"
+            "asset list --help"
+            "asset show --help"
+            "asset ingest --help"
+            "asset replace --help"
+            "asset set --help"
+            "asset move --help"
+            "manifest list --help"
+            "manifest create --help"
+            "manifest palette --help"
+            "manifest set --help"
+            "folder list --help"
+            "folder create --help"
+            "build --help"
+            "check --help"
+            "start --help"
+            "init --help"
+          )
+
+          for command in "${commands[@]}"; do
+            read -r -a arguments <<< "$command"
+            npx --yes "fundus@$FUNDUS_VERSION" "${arguments[@]}" >/dev/null
+          done
