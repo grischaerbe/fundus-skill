@@ -1,6 +1,17 @@
 # Fundus CLI workflow
 
-Use the host package manager's local-only runner and run commands from the host project root. The examples below use npm's `npm exec --no -- fundus`; adapt the runner to the detected lockfile without allowing an implicit registry download. Use `<runner> <command> --help` as the source of truth for the installed Fundus version.
+Use the host package manager's local-only runner and run commands from the host project root. The examples below use npm's `npm exec --no -- fundus`; adapt the runner to the detected lockfile without allowing an implicit registry download. Use `<runner> <command> --help` as the source of truth for the current Fundus CLI.
+
+## Contents
+
+- [Verify the local installation](#verify-the-local-installation)
+- [Inspect before changing](#inspect-before-changing)
+- [Initialize and author visually](#initialize-and-author-visually)
+- [Ingest and update assets](#ingest-and-update-assets)
+- [Import and refresh Figma selections](#import-and-refresh-figma-selections)
+- [Organize assets and manifests](#organize-assets-and-manifests)
+- [Build and verify](#build-and-verify)
+- [Handle command results](#handle-command-results)
 
 ## Verify the local installation
 
@@ -49,7 +60,55 @@ npm exec --no -- fundus asset set navigationPanel \
 
 Pass `--type` when a file extension is ambiguous: PNG can be `image` or `slice`, and MP4 can be `video` or `chroma-key-video`. Do not infer the intended kind from the user's wording; confirm it or inspect focused help. `--parameters` is a shallow top-level merge. `--manifests` replaces the complete explicit membership set; an empty value clears it. Ingest reference targets before creating parameters that point to them.
 
-Prefer `replace` over delete-and-ingest when the asset should retain its ID, type, parameters, references, folder, and manifest memberships.
+Prefer `replace` over delete-and-ingest for an authoritative local file when the asset should retain its ID, type, parameters, references, folder, and manifest memberships. Replacing raw bytes disconnects a repeatable source; use `reimport` instead when an asset has one.
+
+## Import and refresh Figma selections
+
+Read the focused source-import help before using the commands:
+
+```bash
+npm exec --no -- fundus asset ingest --help
+npm exec --no -- fundus asset reimport --help
+```
+
+Configure the Figma token only when the user requested Figma integration. Keep it in a server-side environment variable; never commit, print, persist, or pass it as a CLI argument:
+
+```ts
+export default defineConfig({
+	// Existing paths and plugin config...
+	import: {
+		figma: {
+			token: process.env.FIGMA_ACCESS_TOKEN,
+			defaults: { scale: 3 }
+		}
+	}
+});
+```
+
+Import one stable Figma selection as an Image or Slice asset:
+
+```bash
+npm exec --no -- fundus asset ingest \
+  'https://www.figma.com/design/abc/UI?node-id=12-34' \
+  --from figma --type slice --id navigationPanel --scale 3 \
+  --manifests main --json
+```
+
+`--from figma` is explicit; never infer it merely because the positional value looks like a URL. Figma import requires `--type image|slice` and `--id`. Omit `--scale` to use `import.figma.defaults.scale`. The export scale controls downloaded pixels and is independent of Slice `pixelRatio`. Folder, manifest, and parameter flags have the same semantics as file ingest.
+
+Inspect `asset.importSource` in `asset show --json` before choosing an update operation. A Figma source persists only the file key, node ID, format, and scale; it never contains the token or temporary download URL.
+
+```bash
+# Refresh the exact saved source.
+npm exec --no -- fundus asset reimport navigationPanel --json
+
+# Change either source field independently; the omitted value is preserved.
+npm exec --no -- fundus asset reimport navigationPanel --scale 4 --json
+npm exec --no -- fundus asset reimport navigationPanel \
+  --figma-link 'https://www.figma.com/design/def/UI?node-id=56-78' --json
+```
+
+Reimport preserves the asset ID, type, parameters, folder, and manifest memberships. It aborts rather than overwriting local raw-file drift or a concurrent source change. If the user intentionally wants local raw bytes to become authoritative, use `asset replace` and make clear that future source refreshes will no longer be available.
 
 ## Organize assets and manifests
 

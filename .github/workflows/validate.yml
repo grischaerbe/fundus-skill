@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DISABLE_TELEMETRY: "1"
-      FUNDUS_VERSION: "0.1.0"
       SKILLS_VERSION: "1.5.17"
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +34,7 @@ jobs:
             "asset list --help"
             "asset show --help"
             "asset ingest --help"
+            "asset reimport --help"
             "asset replace --help"
             "asset set --help"
             "asset move --help"
@@ -52,5 +52,5 @@ jobs:
 
           for command in "${commands[@]}"; do
             read -r -a arguments <<< "$command"
-            npx --yes "fundus@$FUNDUS_VERSION" "${arguments[@]}" >/dev/null
+            npx --yes fundus "${arguments[@]}" >/dev/null
           done

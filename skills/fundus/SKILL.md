@@ -1,6 +1,6 @@
 ---
 name: fundus
-description: Use Fundus to import, organize, process, validate, preload, and render production assets in Svelte 5 mobile app projects that already declare Fundus, contain fundus.config.ts, or are explicitly adopting Fundus. Use for Fundus setup, asset libraries, images, slices, video, chroma-key video, audio, manifests, generated modules, the Fundus CLI or editor, runtime components, delivery budgets, and preload lifecycles.
+description: Use Fundus to import, reimport, organize, process, validate, preload, and render production assets in Svelte 5 mobile app projects that already declare Fundus, contain fundus.config.ts, or are explicitly adopting Fundus. Use for Fundus setup, asset libraries, local files, Figma selection sources, images, slices, video, chroma-key video, audio, manifests, generated modules, the Fundus CLI or editor, runtime components, delivery budgets, and preload lifecycles.
 ---
 
 # Fundus
@@ -17,7 +17,7 @@ Run Fundus commands from the host project root, next to `fundus.config.ts`.
 4. Inspect `fundus.config.ts` before running it because it is executable TypeScript.
 5. If the config exists, inspect project state with `npm exec --no -- fundus state --json`. For a large library, capture the JSON in a temporary file outside the repository and use `jq` to read only the assets or manifests relevant to the task.
 6. If the config does not exist and setup was requested, run `npm exec --no -- fundus init --json` once after installation.
-7. Read focused command help before using unfamiliar or version-sensitive flags, for example `npm exec --no -- fundus asset ingest --help`.
+7. Read focused command help before using unfamiliar flags, for example `npm exec --no -- fundus asset ingest --help`.
 
 Use JSON output for agent-driven work. Treat the installed CLI's help and JSON responses as the authoritative contract.
 
@@ -25,7 +25,7 @@ Use JSON output for agent-driven work. Treat the installed CLI's help and JSON r
 
 - Treat raw originals, the Fundus library, and `fundus.config.ts` as inputs.
 - Never hand-edit processed proxies or generated manifest modules. Change their inputs and regenerate them.
-- Prefer stable asset IDs. Use `asset replace` when the source file changes but the asset's identity and metadata should remain intact.
+- Prefer stable asset IDs. Refresh a repeatable source with `asset reimport`; use `asset replace` for authoritative local files when the asset's identity and metadata should remain intact. Replacing raw bytes disconnects any repeatable source.
 - Use Fundus CLI mutations instead of editing the library JSON directly. Mutations validate, persist, process affected assets, and regenerate manifests as one operation.
 - Inspect Fundus references and search host source before renaming or deleting an asset or manifest. Update generated-module imports, manifest export names, and typed asset-property usages in the same task.
 - Do not perform destructive asset, folder, or manifest deletion unless the user requested it.
