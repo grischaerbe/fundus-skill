@@ -1,4 +1,4 @@
 interface:
   display_name: "Fundus"
-  short_description: "Manage assets in Svelte mobile apps"
-  default_prompt: "Use $fundus to add and deliver production assets in this Svelte mobile app."
+  short_description: "Manage Fundus assets and source imports"
+  default_prompt: "Use $fundus to import or refresh production assets and deliver them safely in this Svelte mobile app."
