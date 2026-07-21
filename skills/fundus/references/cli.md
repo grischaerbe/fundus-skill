@@ -6,6 +6,8 @@ Use the host package manager's local-only runner and run commands from the host 
 
 - [Verify the local installation](#verify-the-local-installation)
 - [Inspect before changing](#inspect-before-changing)
+- [Analyze typed asset usage](#analyze-typed-asset-usage)
+- [Prune unused assets safely](#prune-unused-assets-safely)
 - [Initialize and author visually](#initialize-and-author-visually)
 - [Ingest and update assets](#ingest-and-update-assets)
 - [Import and refresh Figma selections](#import-and-refresh-figma-selections)
@@ -34,6 +36,86 @@ npm exec --no -- fundus folder list --json
 ```
 
 `state --json` is the preferred first read. It includes assets, parameters, explicit and passive manifest memberships, proxy state, references, warnings, validation issues, and available preset names. For a large library, write the response to a temporary file outside the repository and use `jq` to select only task-relevant records instead of loading the entire document into context.
+
+## Analyze typed asset usage
+
+First confirm that the installed CLI and project configuration support usage analysis:
+
+```bash
+npm exec --no -- fundus usage --help
+npm exec --no -- fundus usage --json
+npm exec --no -- fundus usage --unused --json
+npm exec --no -- fundus usage navigationPanel --json
+```
+
+The host project must configure both `usage.referenceProvider` and `usage.openLocation` in `fundus.config.ts`. The provider should reuse the project's existing TypeScript, language-server, or framework integration. Fundus does not bring its own TypeScript or framework language server. If the callbacks are absent, usage analysis exits with an expected error; `start` and `check` also print a non-fatal advisory.
+
+Every usage record has one of three statuses:
+
+- `used`: at least one typed source reference is attributed to the asset through a manifest root or dependency path.
+- `unused`: every relevant declaration was resolved conclusively and no source reference was found.
+- `unknown`: dynamic access, an incomplete language-service response, or a provider failure prevents a conclusion.
+
+Only `unused` proves absence strongly enough for pruning. Never collapse `unknown` into `unused`, even when a separate text search returns no matches.
+
+The all-assets response has this envelope:
+
+```json
+{
+	"ok": true,
+	"assets": [
+		{ "assetId": "navigationPanel", "status": "used", "references": [], "roots": [] },
+		{ "assetId": "obsoleteBanner", "status": "unused", "references": [], "roots": [] }
+	]
+}
+```
+
+Use `usage <id> --json` when concrete attribution matters. It returns absolute, one-based source locations plus the manifest roots and asset-reference paths that lead to them:
+
+```json
+{
+	"ok": true,
+	"assets": [
+		{
+			"assetId": "navigationPanel",
+			"status": "used",
+			"references": [
+				{
+					"id": "r0",
+					"file": "/project/src/routes/settings/+page.svelte",
+					"line": 24,
+					"column": 15,
+					"label": "settings.navigationPanel"
+				}
+			],
+			"roots": [
+				{
+					"manifest": "settings",
+					"rootAssetId": "navigationPanel",
+					"paths": [["navigationPanel"]],
+					"result": { "status": "resolved", "referenceIds": ["r0"] }
+				}
+			]
+		}
+	]
+}
+```
+
+CLI results intentionally omit editor `openToken` values because a one-shot process cannot keep them valid. Use the Fundus editor to navigate to returned references. Use `--unused` only without an asset ID; it filters the response to conclusively unused records.
+
+## Prune unused assets safely
+
+Asset pruning is destructive and must be explicitly requested by the user. `fundus build` only removes orphaned derived proxy files. It never deletes an asset record or raw original.
+
+1. Ensure derived state is current. Run `build --json` when inputs or generated output may be stale, then `check --json`.
+2. Capture a fresh candidate set with `usage --unused --json`. Keep the JSON outside the repository when it is large.
+3. For each candidate, run both `usage <id> --json` and `asset show <id> --json`. Report the exact asset ID, raw file, manifest roots, and dependency paths that deletion affects.
+4. Delete direct unused referrers and manifest roots before their referenced dependencies. `asset delete` refuses to remove a target while another asset references it.
+5. Delete one asset with `asset delete <id> --json`, then immediately run `usage --unused --json` again. Continue only if the next candidate still reports `unused`.
+6. Stop rather than delete when analysis becomes `unknown`, the library changed concurrently, deletion fails, or validation reports a new issue.
+7. Finish with `build --json`, `check --json`, the host typecheck, and `git status --short --untracked-files=all`. Review deleted raw files, proxies, library records, and regenerated manifest modules.
+
+There is intentionally no assumption that every item in the first `--unused` response remains deletable. Attribution is a graph, and deleting one root can change the status or deletion order of another asset.
 
 ## Initialize and author visually
 
@@ -122,7 +204,7 @@ npm exec --no -- fundus manifest set settings --color blue --emoji '⚙️' --js
 
 Asset folders organize persisted raw and proxy files. Manifests control delivery and preloading. Do not substitute one concept for the other.
 
-Before renaming or deleting an asset, search host source for its typed manifest-property usages. Before renaming or deleting a manifest, search for its generated module path and exported constant. Apply the CLI mutation and update every host usage in the same task, then run the host typecheck. Fundus validates asset-to-asset references, but it cannot discover imports or property accesses in host source.
+Before renaming or deleting an asset, use `usage <id> --json` when the project configures usage analysis, then search for non-typed or dynamic access the provider may classify as `unknown`. Before renaming or deleting a manifest, search for its generated module path and exported constant. Apply the CLI mutation and update every host usage in the same task, then run the host typecheck. Fundus validates asset-to-asset references; host-source discovery depends on the configured usage provider.
 
 ## Build and verify
 
