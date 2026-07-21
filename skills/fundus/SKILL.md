@@ -1,6 +1,6 @@
 ---
 name: fundus
-description: Use Fundus to import, reimport, organize, process, validate, preload, and render production assets in Svelte 5 mobile app projects that already declare Fundus, contain fundus.config.ts, or are explicitly adopting Fundus. Use for Fundus setup, asset libraries, local files, Figma selection sources, images, slices, video, chroma-key video, audio, manifests, generated modules, the Fundus CLI or editor, runtime components, delivery budgets, and preload lifecycles.
+description: Use Fundus to import, reimport, organize, process, validate, inspect typed usage, safely prune unused assets, preload, and render production assets in Svelte 5 mobile app projects that already declare Fundus, contain fundus.config.ts, or are explicitly adopting Fundus. Use for Fundus setup, asset libraries, local files, Figma selection sources, images, slices, video, chroma-key video, audio, manifests, generated modules, usage tracking, asset pruning, the Fundus CLI or editor, runtime components, delivery budgets, and preload lifecycles.
 ---
 
 # Fundus
@@ -27,10 +27,24 @@ Use JSON output for agent-driven work. Treat the installed CLI's help and JSON r
 - Never hand-edit processed proxies or generated manifest modules. Change their inputs and regenerate them.
 - Prefer stable asset IDs. Refresh a repeatable source with `asset reimport`; use `asset replace` for authoritative local files when the asset's identity and metadata should remain intact. Replacing raw bytes disconnects any repeatable source.
 - Use Fundus CLI mutations instead of editing the library JSON directly. Mutations validate, persist, process affected assets, and regenerate manifests as one operation.
-- Inspect Fundus references and search host source before renaming or deleting an asset or manifest. Update generated-module imports, manifest export names, and typed asset-property usages in the same task.
+- Inspect Fundus references and typed host-source usage before renaming or deleting an asset or manifest. Update generated-module imports, manifest export names, and typed asset-property usages in the same task.
 - Do not perform destructive asset, folder, or manifest deletion unless the user requested it.
 - Run `npm exec --no -- fundus check --json` after changes. Run `npm exec --no -- fundus build --json` first when files, configuration, or generated output may be stale.
 - Report warnings and validation issues. Do not leave known host import or type errors for the user to repair manually.
+
+## Track usage and prune safely
+
+Use `npm exec --no -- fundus usage --help` to confirm that the locally installed Fundus version exposes usage analysis. The host project owns the `usage.referenceProvider` and `usage.openLocation` integration in `fundus.config.ts`; Fundus reuses its language tooling and does not bundle TypeScript, a framework language server, or an editor SDK.
+
+- Run `npm exec --no -- fundus usage --json` for the complete status set. Treat `used`, `unused`, and `unknown` as distinct outcomes.
+- Only `unused` is a pruning candidate. It means analysis resolved conclusively without a source reference. `unknown` means analysis was incomplete or non-conclusive and must never be treated as unused.
+- Run `npm exec --no -- fundus usage <id> --json` before changing one candidate. Inspect its source references, manifest roots, and dependency paths together with `asset show <id> --json`.
+- If usage integration is unavailable, report that limitation. A text search may help locate known consumers, but it cannot prove an asset is unused and must not authorize pruning.
+- `fundus build` prunes orphaned derived proxies; it does not remove library assets or raw originals. User-requested asset pruning uses `fundus asset delete <id> --json`, which deletes the record, raw file, and proxies.
+- Delete unused referrers or manifest roots before unused assets they reference. `asset delete` rejects a referenced target. Re-run `usage --unused --json` after every deletion because removing a root can change attribution for its dependencies.
+- Never bulk-delete from a stale candidate list. Stop on a new `unknown` result, a failed deletion, an introduced validation issue, or concurrent project changes.
+
+Read [references/cli.md](references/cli.md) for the result contract and complete pruning workflow.
 
 ## Design for mobile delivery
 
@@ -49,11 +63,11 @@ Read [references/mobile-workflows.md](references/mobile-workflows.md) when plann
 
 Use the visual editor for authoring that benefits from direct preview, such as slice insets, chroma-key tuning, or browsing a large library. Use the CLI for repeatable agent work, batch inspection, CI, and precise mutations.
 
-Read [references/cli.md](references/cli.md) before ingesting, mutating, organizing, or validating assets.
+Read [references/cli.md](references/cli.md) before analyzing usage, pruning, ingesting, mutating, organizing, or validating assets.
 
 ## Finish the task
 
 1. Run `npm exec --no -- fundus check --json`.
 2. Run the host project's relevant typecheck, tests, or build when generated imports or runtime rendering changed.
 3. Run `git status --short --untracked-files=all` before reviewing the diff so new raw assets and generated files are included. Review the library, proxies, and generated modules as well as tracked changes.
-4. Summarize changed asset IDs, manifest membership, delivered-size impact, warnings, and checks run.
+4. Summarize changed and pruned asset IDs, usage-analysis outcomes, manifest membership, delivered-size impact, warnings, and checks run.
