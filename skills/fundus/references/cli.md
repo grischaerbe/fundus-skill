@@ -8,7 +8,7 @@ Use the host package manager's local-only runner and run commands from the host 
 - [Inspect before changing](#inspect-before-changing)
 - [Initialize and author visually](#initialize-and-author-visually)
 - [Ingest and update assets](#ingest-and-update-assets)
-- [Import and refresh Figma selections](#import-and-refresh-figma-selections)
+- [Import, replace, and refresh Figma selections](#import-replace-and-refresh-figma-selections)
 - [Organize assets and manifests](#organize-assets-and-manifests)
 - [Build and verify](#build-and-verify)
 - [Handle command results](#handle-command-results)
@@ -60,16 +60,19 @@ npm exec --no -- fundus asset set navigationPanel \
 
 Pass `--type` when a file extension is ambiguous: PNG can be `image` or `slice`, and MP4 can be `video` or `chroma-key-video`. Do not infer the intended kind from the user's wording; confirm it or inspect focused help. `--parameters` is a shallow top-level merge. `--manifests` replaces the complete explicit membership set; an empty value clears it. Ingest reference targets before creating parameters that point to them.
 
-Prefer `replace` over delete-and-ingest for an authoritative local file when the asset should retain its ID, type, parameters, references, folder, and manifest memberships. Replacing raw bytes disconnects a repeatable source; use `reimport` instead when an asset has one.
+Prefer `replace` over delete-and-ingest when the asset should retain its ID, type, parameters, references, folder, and manifest memberships. A local-file replacement disconnects a repeatable source. Use `reimport` to refresh or edit an existing saved source, and use Figma replacement to establish a new repeatable source on an existing Image or Slice asset.
 
-## Import and refresh Figma selections
+## Import, replace, and refresh Figma selections
 
 Read the focused source-import help before using the commands:
 
 ```bash
 npm exec --no -- fundus asset ingest --help
+npm exec --no -- fundus asset replace --help
 npm exec --no -- fundus asset reimport --help
 ```
+
+Confirm that the installed `asset replace --help` documents `--from <file|figma>` before using the replacement workflow. If it does not, the host Fundus version predates Figma replacement; do not guess unsupported flags.
 
 Configure the Figma token only when the user requested Figma integration. Keep it in a server-side environment variable; never commit, print, persist, or pass it as a CLI argument:
 
@@ -94,7 +97,17 @@ npm exec --no -- fundus asset ingest \
   --manifests main --json
 ```
 
-`--from figma` is explicit; never infer it merely because the positional value looks like a URL. Figma import requires `--type image|slice` and `--id`. Omit `--scale` to use `import.figma.defaults.scale`. The export scale controls downloaded pixels and is independent of Slice `pixelRatio`. Folder, manifest, and parameter flags have the same semantics as file ingest.
+`--from figma` is explicit; never infer it merely because the positional value looks like a URL. Figma import requires `--type image|slice` and `--id`. Omit `--scale` to use `import.figma.defaults.scale`. Folder, manifest, and parameter flags have the same semantics as file ingest.
+
+Replace an existing local or sourced Image/Slice asset from a new Figma selection:
+
+```bash
+npm exec --no -- fundus asset replace navigationPanel \
+  'https://www.figma.com/design/def/UI?node-id=56-78' \
+  --from figma --scale 3 --json
+```
+
+Figma replacement takes its ID and type from the existing asset, preserves references, folder, manifest memberships, and authored parameters other than a Slice's `pixelRatio`, and stores the selection as its new repeatable source. It aborts rather than overwriting local raw-file drift or a concurrent asset/source change. For a Slice, the explicit or default Figma export scale synchronizes `pixelRatio`; inspect the returned asset before making further parameter changes.
 
 Inspect `asset.importSource` in `asset show --json` before choosing an update operation. A Figma source persists only the file key, node ID, format, and scale; it never contains the token or temporary download URL.
 
@@ -108,7 +121,15 @@ npm exec --no -- fundus asset reimport navigationPanel \
   --figma-link 'https://www.figma.com/design/def/UI?node-id=56-78' --json
 ```
 
-Reimport preserves the asset ID, type, parameters, folder, and manifest memberships. It aborts rather than overwriting local raw-file drift or a concurrent source change. If the user intentionally wants local raw bytes to become authoritative, use `asset replace` and make clear that future source refreshes will no longer be available.
+Choose the mutation from the intended source transition:
+
+| Current source | Intended source | Command |
+| --- | --- | --- |
+| Saved Figma source | Refresh it or change its link/scale | `asset reimport` |
+| Any Image/Slice source | New Figma selection | `asset replace <id> <link> --from figma` |
+| Any source | New local file | `asset replace <id> <file>` |
+
+A refresh without overrides preserves the asset ID, type, authored parameters, folder, and manifest memberships. A reimport with `--figma-link` or `--scale` also synchronizes a Slice's `pixelRatio` to the resulting source scale. Reimport aborts rather than overwriting drift or concurrent source changes. A local-file replacement makes local bytes authoritative and removes future source refreshes; a Figma replacement installs new provenance and remains refreshable.
 
 ## Organize assets and manifests
 
