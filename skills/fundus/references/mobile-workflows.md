@@ -69,6 +69,33 @@ Import runtime components and generated entries instead of assembling raw proxy 
 
 Use the component matching the generated entry kind. Fundus has no audio component; call `audioSourceOf(entry)` at playback time after preloading and pass the result to the host audio engine rather than hard-coding a proxy path.
 
+## Draw into an existing canvas
+
+Use `drawImage` and `drawSlice` from `fundus` when the host already renders into a canvas. Verify that the installed package exports these helpers by inspecting its runtime type declarations; older Fundus versions may not provide them. The installed runtime types are authoritative for rendering APIs, just as local CLI help is authoritative for commands.
+
+Both helpers accept an `HTMLCanvasElement` or `CanvasRenderingContext2D`, followed by the typed entry and `x, y, width, height`. They return `void` and draw synchronously:
+
+```ts
+import { drawImage, drawSlice } from 'fundus';
+import { main } from '$lib/fundus/main.generated';
+
+// In the browser, with the host's existing 2D context `ctx`:
+await main.preload();
+drawSlice(ctx, main.navigationPanel, 20, 30, 300, 180);
+drawImage(ctx, main.logo, 40, 50, 120, 60);
+```
+
+Apply these contracts:
+
+- **Readiness and ownership:** `preload()` loads and decodes by default. Await it successfully before drawing and keep the manifest held for every frame that uses the assets. The lifecycle owner calls `release()` after the last consumer finishes. Repeated drawing needs no additional preload; the decoded source is reused. Preloaded images retain their decoded elements until release, so account for decoded memory as well as delivery bytes.
+- **Missing sources:** the helpers never load or decode on demand. A non-empty draw throws if no decoded source is retained, including before preload completes, after the last holding manifest releases it, or when `image: { decode: false }` / `slice: { decode: false }` was used. Retrying the same manifest's `preload()` with different options does not upgrade its existing hold; choose decoding-enabled preload for canvas consumers from the outset.
+- **Coordinates and DPR:** `(x, y)` is the top-left of the destination box in the context's current units. Use the host's existing DPR transform; do not multiply coordinates or sizes by DPR again. Fundus does not resize or clear the canvas, alter the transform, or change clipping, alpha, compositing, or smoothing. Resizing the backing store is the host's responsibility and clears its contents.
+- **Asset pixel ratio:** a slice's `slicing.pixelRatio` determines its fixed logical dimensions, such as nine-slice borders; a 20-source-pixel border at @2x is 10 logical units. Do not divide the requested destination size by this ratio. Three-slice caps scale with the cross axis; image entries have no asset pixel-ratio metadata and stretch to the explicit destination size.
+- **Overdraw:** the slice's destination box describes its core. Baked-in overdraw paints outside that box, including above/left of `(x, y)`; leave room in the canvas and any caller-owned clip. Painting shares the `<Slice>` component's geometry, while fractional sizes or transforms can antialias cell boundaries.
+- **Invalid sizes:** non-positive width or height is a no-op; non-finite coordinates or dimensions throw.
+
+The `<Slice>` component still loads automatically and does not require explicit preloading. Choose between the component and canvas helpers based on the host's rendering surface.
+
 ## Tune mobile assets
 
 - Use slices for panels, buttons, frames, and other surfaces with protected corners or edges.
