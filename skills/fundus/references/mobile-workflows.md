@@ -51,7 +51,7 @@ Handle preload failure explicitly and expose readiness before rendering UI that 
 
 Render the asset-dependent screen only when `preloadState === 'ready'`, and show a retry or fallback for `error`. Choose a preloading point that matches navigation behavior. For a likely next screen, begin during route intent or the preceding transition. For optional heavy media, defer until the user actually enters the flow; still handle rejection even when the preload is only opportunistic.
 
-Shared URLs are deduplicated by the Fundus runtime. Releasing one manifest does not dispose an asset still held by another preloaded manifest.
+Shared URLs are deduplicated by the Fundus runtime. Releasing one holder — a manifest or a retained handle — does not dispose an asset another holder still keeps.
 
 ## Render typed entries
 
@@ -67,34 +67,86 @@ Import runtime components and generated entries instead of assembling raw proxy 
 <Slice src={main.navigationPanel} />
 ```
 
-Use the component matching the generated entry kind. Fundus has no audio component; call `audioSourceOf(entry)` at playback time after preloading and pass the result to the host audio engine rather than hard-coding a proxy path.
+Use the component matching the generated entry kind. Fundus has no audio component; retain the entry and pass the handle's `source` URL to the host audio engine rather than hard-coding a proxy path. Keep the handle until playback no longer reads the URL.
+
+## Retain individual entries
+
+`retainEntry(entry)` takes one hold on the entry's own file and resolves with a handle: `entry`, `source`, and `release()`. Verify the installed runtime types export it; older Fundus versions instead take raw entries in the drawing helpers and export `audioSourceOf`. The installed runtime types are authoritative for rendering APIs, just as local CLI help is authoritative for commands.
+
+- **Source types:** `HTMLImageElement | ImageBitmap` for images and slices; a playable URL (an object URL over the fully fetched file) for video, chroma-key video, and audio. A chroma-key video retains only its video; retain `mask` or `fallback` separately.
+- **Loading:** an asset already preloaded or in flight is shared, not refetched. After `manifest.preload()` a handle resolves without loading but is still a separate hold.
+- **Release:** call `release()` once the last consumer stops reading `source`. It is idempotent and safe to pass unbound. Reading `source` after release throws.
+- **Failure:** a rejected `retainEntry` leaves no hold. When retaining several entries, release the ones that resolved if another rejects.
+- **Teardown mid-load:** an un-awaited promise still takes its hold. Release the handle when it arrives after its consumer is gone:
+
+```svelte
+<script lang="ts">
+	import { retainEntry, type RetainedEntry } from 'fundus';
+	import { main } from '$lib/fundus/main.generated';
+
+	let panel = $state.raw<RetainedEntry<typeof main.navigationPanel>>();
+
+	$effect(() => {
+		let cancelled = false;
+		let handle: RetainedEntry<typeof main.navigationPanel> | undefined;
+		retainEntry(main.navigationPanel).then(
+			(retained) => {
+				if (cancelled) retained.release();
+				else panel = handle = retained;
+			},
+			(error) => console.error('Failed to retain navigation panel', error)
+		);
+		return () => {
+			cancelled = true;
+			handle?.release();
+			panel = undefined;
+		};
+	});
+</script>
+```
 
 ## Draw into an existing canvas
 
-Use `drawImage` and `drawSlice` from `fundus` when the host already renders into a canvas. Verify that the installed package exports these helpers by inspecting its runtime type declarations; older Fundus versions may not provide them. The installed runtime types are authoritative for rendering APIs, just as local CLI help is authoritative for commands.
-
-Both helpers accept an `HTMLCanvasElement` or `CanvasRenderingContext2D`, followed by the typed entry and `x, y, width, height`. They return `void` and draw synchronously:
+`drawImage` and `drawSlice` accept an `HTMLCanvasElement` or `CanvasRenderingContext2D`, a retained handle of the matching kind, and `x, y, width, height`. They return `void` and draw synchronously:
 
 ```ts
-import { drawImage, drawSlice } from 'fundus';
+import { drawImage, drawSlice, retainEntry } from 'fundus';
 import { main } from '$lib/fundus/main.generated';
 
 // In the browser, with the host's existing 2D context `ctx`:
-await main.preload();
-drawSlice(ctx, main.navigationPanel, 20, 30, 300, 180);
-drawImage(ctx, main.logo, 40, 50, 120, 60);
+const panel = await retainEntry(main.navigationPanel);
+const logo = await retainEntry(main.logo);
+drawSlice(ctx, panel, 20, 30, 300, 180);
+drawImage(ctx, logo, 40, 50, 120, 60);
+
+// After the last frame that uses them:
+panel.release();
+logo.release();
 ```
 
 Apply these contracts:
 
-- **Readiness and ownership:** `preload()` loads and decodes by default. Await it successfully before drawing and keep the manifest held for every frame that uses the assets. The lifecycle owner calls `release()` after the last consumer finishes. Repeated drawing needs no additional preload; the decoded source is reused. Preloaded images retain their decoded elements until release, so account for decoded memory as well as delivery bytes.
-- **Missing sources:** the helpers never load or decode on demand. A non-empty draw throws if no decoded source is retained, including before preload completes, after the last holding manifest releases it, or when `image: { decode: false }` / `slice: { decode: false }` was used. Retrying the same manifest's `preload()` with different options does not upgrade its existing hold; choose decoding-enabled preload for canvas consumers from the outset.
+- **Readiness:** a handle guarantees a decoded source, so drawing never waits or loads. Keep it unreleased for every frame that draws it; drawing with a released handle throws, even for an empty box. Decoded images and slice bitmaps stay in memory while held, so account for decoded memory as well as delivery bytes.
 - **Coordinates and DPR:** `(x, y)` is the top-left of the destination box in the context's current units. Use the host's existing DPR transform; do not multiply coordinates or sizes by DPR again. Fundus does not resize or clear the canvas, alter the transform, or change clipping, alpha, compositing, or smoothing. Resizing the backing store is the host's responsibility and clears its contents.
 - **Asset pixel ratio:** a slice's `slicing.pixelRatio` determines its fixed logical dimensions, such as nine-slice borders; a 20-source-pixel border at @2x is 10 logical units. Do not divide the requested destination size by this ratio. Three-slice caps scale with the cross axis; image entries have no asset pixel-ratio metadata and stretch to the explicit destination size.
 - **Overdraw:** the slice's destination box describes its core. Baked-in overdraw paints outside that box, including above/left of `(x, y)`; leave room in the canvas and any caller-owned clip. Painting shares the `<Slice>` component's geometry, while fractional sizes or transforms can antialias cell boundaries.
 - **Invalid sizes:** non-positive width or height is a no-op; non-finite coordinates or dimensions throw.
 
-The `<Slice>` component still loads automatically and does not require explicit preloading. Choose between the component and canvas helpers based on the host's rendering surface.
+The `<Slice>` component still loads automatically and needs no handle. Choose between the component and canvas helpers based on the host's rendering surface.
+
+## Render with WebGL or Pixi
+
+Fundus ships no renderer adapter. Build one in host code from a retained handle and `sliceGrid(entry, x, y, width, height)`, which returns the exact geometry `drawSlice` paints: four source edges (`sourceX`, `sourceY`, in source pixels) and four destination edges (`destX`, `destY`) per axis for a 3×3 grid.
+
+Do not substitute Pixi's `NineSliceSprite`: it has no overdraw, fixes three-slice caps, and shrinks corners in small boxes. Use a `Mesh` built from the grid.
+
+- **Cells:** paint cell `(c, r)` only when all four spans are positive: `sourceX[c + 1] > sourceX[c]`, likewise for `sourceY`, `destX`, and `destY`. Skipped cells cover three-slice and one-slice modes and insets without a source center.
+- **UVs:** divide source edges by `entry.sourceWidth` and `entry.sourceHeight`. A 4×4 vertex mesh works when its index buffer omits skipped cells; otherwise a zero-width source span stretches one texel column. On resize, recompute positions and the index buffer.
+- **Units:** pass device pixels for seam-free edges. Overdraw and boxes smaller than the fixed borders place edges outside the requested box.
+- **Alpha:** always upload with `UNPACK_PREMULTIPLY_ALPHA_WEBGL` set to `true`. Image elements honor it; slice bitmaps are already premultiplied and ignore it. Every texture ends up premultiplied.
+- **Lifetime:** GPU upload copies pixels, but keep the handle while the renderer may re-upload, such as after a lost context or lazy texture garbage collection. Destroy textures before releasing.
+- **Origin:** retained elements carry no `crossOrigin`; proxies hosted on another origin cannot be uploaded from images or one-slices.
+- **Images:** a plain textured quad sized to the destination box; no grid needed.
 
 ## Tune mobile assets
 
