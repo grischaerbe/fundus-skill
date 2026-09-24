@@ -1,6 +1,6 @@
 ---
 name: fundus
-description: Use Fundus to import, replace, reimport, organize, process, validate, preload, and render production assets in Svelte 5 mobile app projects that already declare Fundus, contain fundus.config.ts, or are explicitly adopting Fundus. Use for Fundus setup, asset libraries, local files, Figma selection sources, Figma tag references, images, slices, video, chroma-key video, audio, manifests, generated modules, cross-package asset dependencies and dependency-injection contracts, the Fundus CLI or editor, runtime components, canvas drawing, delivery budgets, and preload lifecycles.
+description: Use Fundus to import, replace, reimport, organize, process, validate, preload, and render production assets in Svelte 5 mobile app projects that already declare Fundus, contain fundus.config.ts, or are explicitly adopting Fundus. Use for Fundus setup, asset libraries, local files, Figma selection sources, Figma tag references, images, slices, video, chroma-key video, audio, manifests, generated modules, cross-package asset dependencies and dependency-injection contracts, the Fundus CLI or editor, runtime components, retained entries, canvas and WebGL drawing, delivery budgets, and preload lifecycles.
 ---
 
 # Fundus
@@ -39,10 +39,10 @@ Use JSON output for agent-driven work. Treat the installed CLI's help and JSON r
 - Group assets by the screen, route, overlay, or interaction flow that needs them. Avoid one catch-all manifest when it inflates startup cost.
 - Record manifest membership and `deliveredBytes` before and after delivery changes with `npm exec --no -- fundus manifest list --json`; report the byte delta.
 - Account for passive members pulled into a manifest through asset references.
-- Give each preloaded manifest one lifecycle owner. Multiple `preload()` calls on the same generated manifest do not create independent holds, so never let repeated component instances each call `release()` independently.
+- Give each preloaded manifest one lifecycle owner. Multiple `preload()` calls on the same generated manifest do not create independent holds, so never let repeated component instances each call `release()` independently. Per-instance consumers use `retainEntry(entry)` instead: every handle is its own hold with its own `release()`.
 - Preload shortly before a screen or flow becomes interactive, handle rejection explicitly, and release only after the final consumer is gone.
 - Prefer `Slice` for stretchable mobile UI surfaces instead of shipping multiple fixed-size variants.
-- For an existing canvas, use synchronous `drawSlice()` or `drawImage()` after awaiting decoded manifest preloading; keep the manifest held through the final draw. Read [Canvas rendering](references/mobile-workflows.md#draw-into-an-existing-canvas) for availability, coordinates, DPR, and overdraw.
+- For an existing canvas, `await retainEntry(entry)` and pass the handle to synchronous `drawSlice()` or `drawImage()`; release the handle after the final draw. For WebGL or Pixi, combine the handle's `source` with `sliceGrid()`. Read [Retain entries](references/mobile-workflows.md#retain-individual-entries), [Canvas rendering](references/mobile-workflows.md#draw-into-an-existing-canvas), and [Custom renderers](references/mobile-workflows.md#render-with-webgl-or-pixi).
 - Keep original source quality in raw assets and tune delivered proxies through Fundus parameters and presets.
 
 Read [references/mobile-workflows.md](references/mobile-workflows.md) when planning manifest boundaries, runtime loading, rendering, or mobile asset budgets.
