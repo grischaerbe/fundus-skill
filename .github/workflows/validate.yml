@@ -44,6 +44,8 @@ jobs:
             "manifest set --help"
             "folder list --help"
             "folder create --help"
+            "figma prepare-set-tag --help"
+            "figma prepare-delete-tag --help"
             "build --help"
             "check --help"
             "start --help"

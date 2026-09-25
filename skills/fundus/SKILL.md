@@ -1,6 +1,6 @@
 ---
 name: fundus
-description: Use Fundus to import, replace, reimport, organize, process, validate, preload, and render production assets in Svelte 5 mobile app projects that already declare Fundus, contain fundus.config.ts, or are explicitly adopting Fundus. Use for Fundus setup, asset libraries, local files, Figma selection sources, Figma tag references, images, slices, video, chroma-key video, audio, manifests, generated modules, cross-package asset dependencies and dependency-injection contracts, the Fundus CLI or editor, runtime components, retained entries, canvas and WebGL drawing, delivery budgets, and preload lifecycles.
+description: Use Fundus to import, replace, reimport, organize, process, validate, preload, and render production assets in Svelte 5 mobile app projects that already declare Fundus, contain fundus.config.ts, or are explicitly adopting Fundus. Use for Fundus setup, asset libraries, local files, Figma selection sources, Figma tag references, tagging Figma nodes through the Figma MCP, images, slices, video, chroma-key video, audio, manifests, generated modules, cross-package asset dependencies and dependency-injection contracts, the Fundus CLI or editor, runtime components, retained entries, canvas and WebGL drawing, delivery budgets, and preload lifecycles.
 ---
 
 # Fundus
@@ -26,7 +26,8 @@ Use JSON output for agent-driven work. Treat the installed CLI's help and JSON r
 - Treat raw originals, the Fundus library, and `fundus.config.ts` as inputs.
 - Never hand-edit processed proxies or generated manifest modules. Change their inputs and regenerate them.
 - Prefer stable asset IDs. Refresh an existing repeatable source with `asset reimport`. Use `asset replace` to keep identity and metadata while establishing a new authoritative source: a local file disconnects provenance, while `--from figma` stores a new repeatable Figma source.
-- Prefer a Figma **tag** over a raw node id for repeatable Figma sources. A tag is a stable Fundus asset id stored on the node as shared plugin data (`fundus/assetId`) and assigned with the Fundus Figma plugin; it survives node moves and file copies. In tag mode the tag is the asset id, so renaming means changing the tag, not the id.
+- Prefer a Figma **tag** over a raw node id for repeatable Figma sources. A tag is a stable Fundus asset id stored on the node as shared plugin data (`fundus/assetId`); it survives node moves and file copies. In tag mode the tag is the asset id, so renaming means changing the tag, not the id.
+- Tag Figma nodes yourself when you create or place them: designers use the Fundus Figma plugin, agents use `fundus figma prepare-set-tag` and run the returned script unchanged with the Figma MCP `use_figma` tool. Never write `fundus` plugin data with hand-written `use_figma` code. Read [Tag Figma nodes from an agent](references/cli.md#tag-figma-nodes-from-an-agent).
 - Use Fundus CLI mutations instead of editing the library JSON directly. Mutations validate, persist, process affected assets, and regenerate manifests as one operation.
 - Inspect Fundus references and search host source before renaming or deleting an asset or manifest. Update generated-module imports, manifest export names, and typed asset-property usages in the same task.
 - Do not perform destructive asset, folder, or manifest deletion unless the user requested it.

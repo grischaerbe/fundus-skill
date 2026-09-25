@@ -10,6 +10,7 @@ Use the host package manager's local-only runner and run commands from the host 
 - [Ingest and update assets](#ingest-and-update-assets)
 - [Import, replace, and refresh Figma selections](#import-replace-and-refresh-figma-selections)
 - [Reference Figma nodes by tag](#reference-figma-nodes-by-tag)
+- [Tag Figma nodes from an agent](#tag-figma-nodes-from-an-agent)
 - [Declare cross-package dependencies](#declare-cross-package-dependencies)
 - [Organize assets and manifests](#organize-assets-and-manifests)
 - [Build and verify](#build-and-verify)
@@ -139,7 +140,7 @@ A refresh without overrides preserves the asset ID, type, authored parameters, f
 
 ## Reference Figma nodes by tag
 
-A node id is brittle: restructuring a frame or importing from a copied document can change it. A **tag** — a stable Fundus asset id stored on the node as shared plugin data (`fundus/assetId`) — resolves to the current node through the REST API at import time, so the reference survives node moves and file copies. Assign tags with the Fundus Figma plugin (imported from `figma-plugin/manifest.json` in the Figma desktop app, or from the bundle attached to the Fundus GitHub release); it is never published to npm.
+A node id is brittle: restructuring a frame or importing from a copied document can change it. A **tag** — a stable Fundus asset id stored on the node as shared plugin data (`fundus/assetId`) — resolves to the current node through the REST API at import time, so the reference survives node moves and file copies. Designers assign tags with the Fundus Figma plugin (imported from `figma-plugin/manifest.json` in the Figma desktop app, or from the bundle attached to the Fundus GitHub release); it is never published to npm. Agents assign them through the Figma MCP instead — see [Tag Figma nodes from an agent](#tag-figma-nodes-from-an-agent).
 
 In tag mode **the tag is the asset id** — do not pass `--id` or a positional node-selection link. A tag import still needs a file: pass `--figma-file` (a file key or a link) or set `import.figma.defaultFileKey` for imports that omit it.
 
@@ -164,6 +165,39 @@ npm exec --no -- fundus asset replace navigationPanel --from figma \
 ```
 
 A node-link asset takes `--figma-link` on reimport and rejects `--figma-tag`/`--figma-file`; a tag asset takes `--figma-tag`/`--figma-file` and rejects `--figma-link`. Changing a tag renames the asset, so update every host usage of the old id in the same task as with any rename, and reject a tag already used by another asset. The editor import dialog offers the same choice through a **Link / Tag** switch, and a tag asset's Source section edits the tag, file key, and scale in place.
+
+## Tag Figma nodes from an agent
+
+When an agent creates or places a node in Figma that should become a Fundus asset, it tags the node itself instead of asking a designer to run the plugin. The Figma REST API cannot write plugin data, so Fundus never writes the tag: `fundus figma prepare-set-tag` validates the request and returns a script, and the agent runs that script with the Figma MCP `use_figma` tool.
+
+Prerequisites: the Figma MCP server with `use_figma` write access to the file, and the Fundus Figma token from `fundus.config.ts` (read access is enough for Fundus). Confirm that `npm exec --no -- fundus figma --help` lists `prepare-set-tag`; if the command is unknown, the host Fundus version predates agent tagging — do not emulate it with hand-written plugin code.
+
+```bash
+npm exec --no -- fundus figma prepare-set-tag \
+  --file 'https://www.figma.com/design/abc/UI' --node-id 12-34 \
+  --tag navigationPanel --json
+```
+
+1. Choose the tag like any asset id: a stable camelCase name for what the asset is. `--file` takes a file key or link and defaults to `import.figma.defaultFileKey`. `--node-id` takes `12:34` or the `12-34` form from a `node-id` link parameter.
+2. On `{"ok": false, "error": …, "existingTags": […]}` the tag is taken in the file, or a Fundus asset with that id already exists from another source. Pick another name; use `existingTags` (tag, node id, node name, page) to stay consistent with the file's naming.
+3. On `{"ok": true, "code": …}`, relay every entry in `warnings`, then call `use_figma` with the returned `fileKey` and `code`. Pass `code` **unchanged** — never edit, shorten, or reassemble it. It re-checks every page of the live document before writing, which takes a few seconds on large files.
+4. The script returns `{"ok": true, "nodeId", "nodeName", "tag", "previousTag", "annotated"}`. If it throws instead, it wrote nothing: the document changed since the prepare step. Rerun `prepare-set-tag` rather than retrying the old script.
+5. Import the tagged node: `npm exec --no -- fundus asset ingest --from figma --figma-tag navigationPanel --type slice --json`.
+
+Rules to preserve:
+
+- A node that already carries a tag — the same one or another — is refused unless you pass `--force`. Use `--force` only when the user wants that node retagged. When the old tag feeds a Fundus asset, the error and warning name the follow-up `asset reimport <old> --figma-tag <new>`, which renames the asset; update host usages as with any rename.
+- Tag the instance you placed, or the node inside the main component — never a layer inside an instance (ids starting with `I`, such as `I12:34;56:78`). Those layers mirror the main component's node, including its tag, and Fundus refuses them.
+- A node created moments ago may not be in the REST snapshot yet; the plan then carries a warning and the script verifies the node exists.
+- Each `prepare-set-tag` call plans one node. Tag several new assets with one prepare-and-run pair per node.
+
+Remove a tag only when the user asked for it:
+
+```bash
+npm exec --no -- fundus figma prepare-delete-tag --tag navigationPanel --json
+```
+
+Identify the node by `--tag` or `--node-id` (both must match when given), then run the returned `code` with `use_figma` the same way. The script removes the tag and its Dev Mode annotation and keeps every other annotation. It is refused without `--force` when a Fundus asset is imported from the tag, because that asset's reimport would fail afterwards.
 
 ## Declare cross-package dependencies
 
