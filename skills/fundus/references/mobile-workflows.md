@@ -69,6 +69,14 @@ Import runtime components and generated entries instead of assembling raw proxy 
 
 Use the component matching the generated entry kind. Fundus has no audio component; retain the entry and pass the handle's `source` URL to the host audio engine rather than hard-coding a proxy path. Keep the handle until playback no longer reads the URL.
 
+### Size slice boxes
+
+`<Slice>`, `drawSlice`, and `sliceGrid` fill whatever box they are given. To size that box from the artwork, use `sliceLayoutGeometry(entry)`: the natural `width` and `height` of the slice's element core in CSS pixels, plus a ready-made CSS `aspectRatio`. Do not derive it from `sourceWidth / slicing.pixelRatio`: that ignores baked-in overdraw, and stretch compression shrinks the delivered source.
+
+- **Three-slices:** the cross axis (`height` for `three-horizontal`, `width` for `three-vertical`) is a hard constraint; the caps keep their authored aspect ratio only at that size. The along-axis value is an authored reference size; fixing the element to it defeats the slice.
+- **Nine-slices:** both values are authored reference sizes; the element may take any size.
+- **Versions:** `sliceLayoutGeometry` exists since Fundus 0.22. Before 0.28 it reports the compressed size for compressed slices; entries from 0.28 carry `uncompressedWidth` and `uncompressedHeight` when compression shrank the image.
+
 ## Retain individual entries
 
 Two APIs hold one entry's own file, sharing loads with manifests and each other:
