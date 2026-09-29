@@ -179,17 +179,37 @@ npm exec --no -- fundus figma prepare-set-tag \
 ```
 
 1. Choose the tag like any asset id: a stable camelCase name for what the asset is. `--file` takes a file key or link and defaults to `import.figma.defaultFileKey`. `--node-id` takes `12:34` or the `12-34` form from a `node-id` link parameter.
-2. On `{"ok": false, "error": …, "existingTags": […]}` the tag is taken in the file, or a Fundus asset with that id already exists from another source. Pick another name; use `existingTags` (tag, node id, node name, page) to stay consistent with the file's naming.
+2. On `{"ok": false, "error": …, "existingTags": […]}` the tag is taken by another node in the file, or a Fundus asset with that id already exists from another source. Pick another name; use `existingTags` (tag, node id, node name, page) to stay consistent with the file's naming. Pass `--force` instead only when the user wants exactly this tag on this node (see the rules below).
 3. On `{"ok": true, "code": …}`, relay every entry in `warnings`, then call `use_figma` with the returned `fileKey` and `code`. Pass `code` **unchanged** — never edit, shorten, or reassemble it. It re-checks every page of the live document before writing, which takes a few seconds on large files.
-4. The script returns `{"ok": true, "nodeId", "nodeName", "tag", "previousTag", "annotated"}`. If it throws instead, it wrote nothing: the document changed since the prepare step. Rerun `prepare-set-tag` rather than retrying the old script.
+4. The script returns `{"ok": true, "nodeId", "nodeName", "tag", "previousTag", "annotated", "movedFrom"}`; `movedFrom` lists the nodes a forced set took the tag from (`nodeId`, `nodeName`, `page`) and is empty otherwise. If it throws instead, it wrote nothing: the document changed since the prepare step. Rerun `prepare-set-tag` rather than retrying the old script.
 5. Import the tagged node: `npm exec --no -- fundus asset ingest --from figma --figma-tag navigationPanel --type slice --json`.
 
 Rules to preserve:
 
-- A node that already carries a tag — the same one or another — is refused unless you pass `--force`. Use `--force` only when the user wants that node retagged. When the old tag feeds a Fundus asset, the error and warning name the follow-up `asset reimport <old> --figma-tag <new>`, which renames the asset; update host usages as with any rename.
+- `--force` always sets the tag; without it, each case below is refused. Use it only when the user wants that outcome, and relay what it did:
+  - The node already carries a tag, the same one or another: the tag is rewritten or replaced. When the old tag feeds a Fundus asset, the error and warning name the follow-up `asset reimport <old> --figma-tag <new>`, which renames the asset; update host usages as with any rename.
+  - Other nodes carry the tag: it moves to this node, and the script clears it and its Dev Mode annotation on the others, so a tag stays on exactly one node. A Fundus asset imported from the tag resolves to the new node on its next reimport; the warning says so.
+  - A Fundus asset with that id exists from another source (upload, another node, another file): the node is tagged anyway. The warning names `asset replace <id> --from figma --figma-tag <id> --figma-file <key>`, which switches the asset to the tag and drops its current source; run it only when that is the goal.
 - Tag the instance you placed, or the node inside the main component — never a layer inside an instance (ids starting with `I`, such as `I12:34;56:78`). Those layers mirror the main component's node, including its tag, and Fundus refuses them.
 - A node created moments ago may not be in the REST snapshot yet; the plan then carries a warning and the script verifies the node exists.
 - Each `prepare-set-tag` call plans one node. Tag several new assets with one prepare-and-run pair per node.
+
+### Move a node-link asset to a tag
+
+An asset imported by node link can move to tag mode without changing its id. Tag its own node with the asset id, then replace the asset from the tag:
+
+```bash
+npm exec --no -- fundus figma prepare-set-tag \
+  --file 'https://www.figma.com/design/abc/UI' --node-id 12-34 \
+  --tag navigationPanel --json
+# run the returned code with use_figma, then:
+npm exec --no -- fundus asset replace navigationPanel --from figma \
+  --figma-tag navigationPanel --figma-file abc --json
+```
+
+The node must be the one the asset is imported from, in the same file; that is not a conflict and needs no `--force`. The plan's warning names the exact `asset replace` command. `asset replace` keeps the id, type, folder, parameters, references, and manifest memberships, so host usages stay valid; do not use `asset ingest`, which would collide with the existing id. Migrate several assets with one prepare, run, and replace sequence per asset. If `prepare-set-tag --help` does not mention moving tags, the host Fundus predates this path and refuses the tag; do not work around it by renaming assets — ask the user to update Fundus.
+
+### Remove a tag
 
 Remove a tag only when the user asked for it:
 
