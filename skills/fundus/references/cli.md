@@ -120,7 +120,7 @@ One prepare-and-run pair per node.
 
 ### Move a node-link asset to a tag
 
-Tag the asset's own node (same file) with the asset id — not a conflict, no `--force` — then replace from the tag with `--scale` set to its current `importSource.parameters.scale` (omitted, it uses `defaults.scale` and resets a slice's `pixelRatio`). The id, type, folder, other parameters, references, and memberships stay.
+Tag the asset's own node (same file) with the asset id — not a conflict, no `--force` — then replace from the tag with `--scale` set to its current `importSource.parameters.scale` (omitted, it uses `defaults.scale` and resets a slice's `pixelRatio`). From 0.28 the follow-up that `prepare-set-tag` warns with already carries it; older versions omit it. The id, type, folder, other parameters, references, and memberships stay.
 
 ```bash
 fundus figma prepare-set-tag --file abc --node-id 12-34 --tag navigationPanel --json
