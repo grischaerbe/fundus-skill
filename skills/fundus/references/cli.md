@@ -1,295 +1,191 @@
-# Fundus CLI workflow
-
-Use the host package manager's local-only runner and run commands from the host project root. The examples below use npm's `npm exec --no -- fundus`; adapt the runner to the detected lockfile without allowing an implicit registry download. Use `<runner> <command> --help` as the source of truth for the current Fundus CLI.
+# Fundus CLI
 
 ## Contents
 
-- [Verify the local installation](#verify-the-local-installation)
-- [Inspect before changing](#inspect-before-changing)
-- [Initialize and author visually](#initialize-and-author-visually)
-- [Ingest and update assets](#ingest-and-update-assets)
-- [Import, replace, and refresh Figma selections](#import-replace-and-refresh-figma-selections)
-- [Reference Figma nodes by tag](#reference-figma-nodes-by-tag)
+- [Set up](#set-up)
+- [Inspect](#inspect)
+- [Ingest and edit](#ingest-and-edit)
+- [Choose an update](#choose-an-update)
+- [Figma sources](#figma-sources)
 - [Tag Figma nodes from an agent](#tag-figma-nodes-from-an-agent)
 - [Declare cross-package dependencies](#declare-cross-package-dependencies)
-- [Organize assets and manifests](#organize-assets-and-manifests)
-- [Build and verify](#build-and-verify)
-- [Handle command results](#handle-command-results)
+- [Organize](#organize)
+- [Build and check](#build-and-check)
 
-## Verify the local installation
+## Set up
 
-```bash
-node --version
-npm ls fundus --depth=0
-npm exec --no -- fundus --version
-```
+`fundus init --json` (only without a config) writes `fundus.config.ts`, `assets/fundus.library.json` with an empty `main` manifest, and `assets/raw/`. Proxies go to `static/fundus`, served at `/fundus/` (if `kit.paths.base` is set, include it in `proxyBasePath`); modules go to `manifestsDir`, `src/lib/fundus`, imported as `$lib/fundus/<kebab-name>.generated`. Run `fundus build --json` right after init: `check` fails until the modules exist. No manifest is special: the host decides what preloads at startup.
 
-Fundus requires Node.js 20.19 or newer and Svelte 5. It must be a runtime dependency because generated modules and host components import from `fundus`. If the user explicitly requested setup and Fundus is absent, install it first with the host package manager, for example `npm install fundus`. Inspect `fundus.config.ts` before executing the CLI because loading the config runs TypeScript from the host project.
-
-## Inspect before changing
+## Inspect
 
 ```bash
-npm exec --no -- fundus state --json
-npm exec --no -- fundus asset list --json
-npm exec --no -- fundus asset show <id> --json
-npm exec --no -- fundus manifest list --json
-npm exec --no -- fundus folder list --json
+fundus state --json             # first read: assets, parameters, explicit/passive memberships, proxy state,
+                                # references, requiredBy, warnings, issues, preset names
+fundus asset list --json        # filters: --manifest <name>, --type <type>, --warnings-only
+fundus asset show <id> --json   # includes importSource and requiredBy
+fundus manifest list --json     # explicit and passive members, deliveredBytes
+fundus folder list --json
+fundus usage [<id> | --unused] --json   # host source references; needs usage.referenceProvider/openLocation in config
 ```
 
-`state --json` is the preferred first read. It includes assets, parameters, explicit and passive manifest memberships, proxy state, references, warnings, validation issues, and available preset names. For a large library, write the response to a temporary file outside the repository and use `jq` to select only task-relevant records instead of loading the entire document into context.
-
-## Initialize and author visually
+## Ingest and edit
 
 ```bash
-npm exec --no -- fundus init --json
-npm exec --no -- fundus start
-npm exec --no -- fundus start --port 8080 --no-open
+fundus asset ingest ./exports/panel@2x.png --type slice --manifests main --json
+fundus asset replace navigationPanel ./exports/panel-v2.png --json
+fundus asset set navigationPanel --parameters '{"mode":"three-horizontal"}' --manifests=main,settings --json
+fundus asset rename sidebarPanel navigationPanel --json
 ```
 
-Only initialize when no Fundus config exists. `start` is interactive and does not support `--json`.
+- **Type:** `--type` is needed for everything but audio (raster files are `image` or `slice`, video files `video` or `chroma-key-video`). Never pick it from the user's wording ("button background" suggests a slice): propose, confirm, then pass it.
+- **Id:** defaults to the camelCased file name without `@2x`-style suffixes (`logo@2x.png` → `logo`); `--id` overrides.
+- **Parameters:** `--parameters` is a shallow top-level merge. A nested object replaces the whole field and must be complete (a partial `chromaKey` is rejected: copy it from `asset show`, edit, send it all); `null` clears an optional field; `{"$asset": "<id>"}` references an asset, which must exist first. For unknown shapes, copy an existing asset of that type from `state` (which also lists preset names); validation errors name bad fields. Never guess.
+- **Memberships:** `--manifests` sets the initial set on `ingest` and replaces the whole set on `set`, so read the current memberships before adding one; `--manifests=` clears. Every name must exist.
+- **Slices:** parameters are flat — `mode` (`nine`, `three-horizontal`, `three-vertical`, `one`), `insets` and optional `overdraw` (`{top, right, bottom, left}` in source pixels), `pixelRatio`, optional `compression`, `preset`. A local ingest seeds `mode: nine`, guesses insets (¼ per side), and reads `pixelRatio` only from an `@Nx`/`_Nx`/`-Nx` suffix (else 1): set real values or have the user author them in the editor. Insets and overdraw never rescale, so rescale them whenever the source density changes; a local-file replace keeps the old `pixelRatio`. `--compression-x`/`-y` (0–100, on `ingest` and `set`; both 0 removes) shrink stretch regions to cut bytes.
+- **Video:** proxies are H.264 without alpha and keep audio (AAC 128 kbps). Ask for a solid-backdrop render of transparent video and ingest it as `chroma-key-video`; strip silent audio first; cap size with `maxWidth`.
+- **Chroma key:** all values are 0–1; `keyColor` is RGB and out-of-range values clamp silently (`[0,177,64]` → cyan); `despillCoverage` < 1 protects key-colored artwork. Keying changes rewrite only the module, never re-encode. `mask` and `fallback` are top-level references to `image` assets that ship as passive members (no membership needed) and appear as `entry.mask`/`entry.fallback`.
 
-## Ingest and update assets
+## Choose an update
 
-```bash
-npm exec --no -- fundus asset ingest ./exports/panel@2x.png \
-  --type slice --manifests main --json
+Read `asset.importSource` in `asset show --json` first. A Figma source (`importer: "figma"`) is a **tag** source when `parameters.mode` is `"tag"`; tag sources also store the last resolved `nodeId`, so a node id alone does not mean node link.
 
-npm exec --no -- fundus asset replace navigationPanel ./exports/panel-v2.png --json
+| Current source | Goal | Command |
+| --- | --- | --- |
+| Figma node link | Refresh, or change link/scale | `asset reimport <id> [--figma-link <url>] [--scale <n>]` |
+| Figma tag | Refresh, or change file/scale/tag | `asset reimport <id> [--figma-file <key>] [--scale <n>] [--figma-tag <new>]` — a new tag renames the asset and must already be on the node: [Rename a tag asset](#rename-a-tag-asset) |
+| Any Image/Slice | New Figma node | `asset replace <id> <url> --from figma [--scale <n>]` |
+| Any Image/Slice | Switch to its own tag | [Move a node-link asset to a tag](#move-a-node-link-asset-to-a-tag) |
+| Any | New local file | `asset replace <id> <file>` |
 
-npm exec --no -- fundus asset set navigationPanel \
-  --parameters '{"mode":"three-horizontal"}' \
-  --manifests main,settings --json
-```
+- A plain `reimport` re-resolves the saved source (a tag re-scans its file, so it survives node moves). Overrides keep omitted values. Node-link assets reject `--figma-tag`/`--figma-file`; tag assets reject `--figma-link`.
+- `replace` keeps the id, type, parameters, references, folder, and memberships. A local file makes local bytes authoritative and ends refreshes; a Figma replace installs a new refreshable source.
+- **Slice `pixelRatio`:** a Figma replace, and a reimport with any flag — even `--figma-file` alone — resets it to the export scale; only a flagless reimport keeps it. Other parameters are kept. Inspect the returned asset before more parameter changes.
+- `reimport` and Figma `replace` abort instead of overwriting drift in their own raw file or a concurrent change.
 
-Pass `--type` when a file extension is ambiguous: PNG can be `image` or `slice`, and MP4 can be `video` or `chroma-key-video`. Do not infer the intended kind from the user's wording; confirm it or inspect focused help. `--parameters` is a shallow top-level merge. `--manifests` replaces the complete explicit membership set; an empty value clears it. Ingest reference targets before creating parameters that point to them.
+## Figma sources
 
-Prefer `replace` over delete-and-ingest when the asset should retain its ID, type, parameters, references, folder, and manifest memberships. A local-file replacement disconnects a repeatable source. Use `reimport` to refresh or edit an existing saved source, and use Figma replacement to establish a new repeatable source on an existing Image or Slice asset.
-
-## Import, replace, and refresh Figma selections
-
-Read the focused source-import help before using the commands:
-
-```bash
-npm exec --no -- fundus asset ingest --help
-npm exec --no -- fundus asset replace --help
-npm exec --no -- fundus asset reimport --help
-```
-
-Confirm that the installed `asset replace --help` documents `--from <file|figma>` before using the replacement workflow. If it does not, the host Fundus version predates Figma replacement; do not guess unsupported flags.
-
-Configure the Figma token only when the user requested Figma integration. Keep it in a server-side environment variable; never commit, print, persist, or pass it as a CLI argument:
+Configure Figma only when the user asked. The token needs `file_content:read` and lives in a server-side environment variable — never commit, print, persist, or pass it as an argument, and recommend rotating one pasted into chat. `build` and `check` need no token. The first Figma import upgrades the library to version 2, which older Fundus cannot open:
 
 ```ts
 export default defineConfig({
-	// Existing paths and plugin config...
 	import: {
 		figma: {
 			token: process.env.FIGMA_ACCESS_TOKEN,
-			defaults: { scale: 3 },
-			// Default file for tag imports that omit an explicit file key.
-			defaultFileKey: process.env.FIGMA_FILE_KEY
+			defaults: { scale: 2 },
+			defaultFileKey: process.env.FIGMA_FILE_KEY // used when --figma-file/--file is omitted
 		}
 	}
 });
 ```
 
-The token needs the `file_content:read` scope. Import one stable Figma selection as an Image or Slice asset:
+The CLI does not load `.env`: export the token in the shell. On a rate-limit error, stop and tell the user; never retry in a loop.
+
+`--from figma` is always explicit; a URL positional never implies it. Figma creates Image or Slice assets only. Omitted `--scale` (1–4) uses `defaults.scale`. `<Slice>` never renders above `maxDpr` (default 2), so exporting slices above scale 2 wastes bytes unless the host raises `maxDpr`. Folder, manifest, and parameter flags work as for files.
 
 ```bash
-npm exec --no -- fundus asset ingest \
-  'https://www.figma.com/design/abc/UI?node-id=12-34' \
-  --from figma --type slice --id navigationPanel --scale 3 \
-  --manifests main --json
+# Node link: --type and --id are required.
+fundus asset ingest 'https://www.figma.com/design/abc/UI?node-id=12-34' \
+  --from figma --type slice --id navigationPanel --scale 2 --manifests main --json
+
+# Tag: the tag IS the asset id — no --id, no positional link.
+fundus asset ingest --from figma --figma-tag navigationPanel --type slice --figma-file abc --json
 ```
 
-`--from figma` is explicit; never infer it merely because the positional value looks like a URL. A node-selection import requires `--type image|slice` and `--id`; a tag import (below) supplies the id through `--figma-tag` instead. Omit `--scale` to use `import.figma.defaults.scale`. Folder, manifest, and parameter flags have the same semantics as file ingest.
-
-Replace an existing local or sourced Image/Slice asset from a new Figma selection:
-
-```bash
-npm exec --no -- fundus asset replace navigationPanel \
-  'https://www.figma.com/design/def/UI?node-id=56-78' \
-  --from figma --scale 3 --json
-```
-
-Figma replacement takes its ID and type from the existing asset, preserves references, folder, manifest memberships, and authored parameters other than a Slice's `pixelRatio`, and stores the selection as its new repeatable source. It aborts rather than overwriting local raw-file drift or a concurrent asset/source change. For a Slice, the explicit or default Figma export scale synchronizes `pixelRatio`; inspect the returned asset before making further parameter changes.
-
-Inspect `asset.importSource` in `asset show --json` before choosing an update operation, and distinguish a **node-link** source from a **tag** source: they accept different reimport overrides. A Figma source persists only its identifiers — a file key plus either a node id or a tag, along with format and scale — and never the token or temporary download URL. The reimport overrides below apply to a node-link asset; see [Reference Figma nodes by tag](#reference-figma-nodes-by-tag) for tag assets.
-
-```bash
-# Refresh the exact saved source (re-resolve the node or tag).
-npm exec --no -- fundus asset reimport navigationPanel --json
-
-# Node-link asset: change either source field independently; the omitted value is preserved.
-npm exec --no -- fundus asset reimport navigationPanel --scale 4 --json
-npm exec --no -- fundus asset reimport navigationPanel \
-  --figma-link 'https://www.figma.com/design/def/UI?node-id=56-78' --json
-```
-
-Choose the mutation from the intended source transition:
-
-| Current source | Intended source | Command |
-| --- | --- | --- |
-| Saved Figma node-link source | Refresh it or change its link/scale | `asset reimport [--figma-link … \| --scale …]` |
-| Saved Figma tag source | Refresh, re-point, rescale, or rename via the tag | `asset reimport [--figma-tag … \| --figma-file … \| --scale …]` |
-| Any Image/Slice source | New Figma node selection | `asset replace <id> <link> --from figma` |
-| Any Image/Slice source | New Figma tag selection | `asset replace <id> --from figma --figma-tag <tag>` |
-| Any source | New local file | `asset replace <id> <file>` |
-
-A refresh without overrides preserves the asset ID, type, authored parameters, folder, and manifest memberships. A reimport with `--figma-link` or `--scale` also synchronizes a Slice's `pixelRatio` to the resulting source scale. Reimport aborts rather than overwriting drift or concurrent source changes. A local-file replacement makes local bytes authoritative and removes future source refreshes; a Figma replacement installs new provenance and remains refreshable.
-
-## Reference Figma nodes by tag
-
-A node id is brittle: restructuring a frame or importing from a copied document can change it. A **tag** — a stable Fundus asset id stored on the node as shared plugin data (`fundus/assetId`) — resolves to the current node through the REST API at import time, so the reference survives node moves and file copies. Designers assign tags with the Fundus Figma plugin (imported from `figma-plugin/manifest.json` in the Figma desktop app, or from the bundle attached to the Fundus GitHub release); it is never published to npm. Agents assign them through the Figma MCP instead — see [Tag Figma nodes from an agent](#tag-figma-nodes-from-an-agent).
-
-In tag mode **the tag is the asset id** — do not pass `--id` or a positional node-selection link. A tag import still needs a file: pass `--figma-file` (a file key or a link) or set `import.figma.defaultFileKey` for imports that omit it.
-
-```bash
-# Import by tag; the id is the tag. Uses defaultFileKey when --figma-file is omitted.
-npm exec --no -- fundus asset ingest --from figma --figma-tag navigationPanel \
-  --type slice --figma-file 'https://www.figma.com/design/abc/UI' --scale 3 \
-  --manifests main --json
-
-# Refresh: re-resolve the tag to its current node.
-npm exec --no -- fundus asset reimport navigationPanel --json
-
-# Re-point in place to another document and/or scale (the tag, hence the id, stays).
-npm exec --no -- fundus asset reimport navigationPanel --figma-file def456 --scale 4 --json
-
-# Change the tag — this renames the asset to the new tag.
-npm exec --no -- fundus asset reimport navigationPanel --figma-tag mainNavigationPanel --json
-
-# Replace an existing asset's bytes from a Figma tag.
-npm exec --no -- fundus asset replace navigationPanel --from figma \
-  --figma-tag navigationPanel --json
-```
-
-A node-link asset takes `--figma-link` on reimport and rejects `--figma-tag`/`--figma-file`; a tag asset takes `--figma-tag`/`--figma-file` and rejects `--figma-link`. Changing a tag renames the asset, so update every host usage of the old id in the same task as with any rename, and reject a tag already used by another asset. The editor import dialog offers the same choice through a **Link / Tag** switch, and a tag asset's Source section edits the tag, file key, and scale in place.
+A **tag** is an asset id stored on a node as shared plugin data (`fundus/assetId`) and resolved at import time, so it survives node moves and file copies; node ids do not. Designers set tags with the Fundus Figma plugin; agents use the flow below. A reimport fails with "More than one Figma node is tagged" when a designer duplicated a tagged node. `prepare-delete-tag --tag <tag> --json` refuses but lists the carrying nodes; then `prepare-set-tag --force` on the right node moves the tag off the copies.
 
 ## Tag Figma nodes from an agent
 
-When an agent creates or places a node in Figma that should become a Fundus asset, it tags the node itself instead of asking a designer to run the plugin. The Figma REST API cannot write plugin data, so Fundus never writes the tag: `fundus figma prepare-set-tag` validates the request and returns a script, and the agent runs that script with the Figma MCP `use_figma` tool.
-
-Prerequisites: the Figma MCP server with `use_figma` write access to the file, and the Fundus Figma token from `fundus.config.ts` (read access is enough for Fundus). Confirm that `npm exec --no -- fundus figma --help` lists `prepare-set-tag`; if the command is unknown, the host Fundus version predates agent tagging — do not emulate it with hand-written plugin code.
+The Figma REST API cannot write plugin data, so Fundus prepares a script and the agent runs it with the Figma MCP `use_figma` tool (which needs write access; the Fundus token needs only read).
 
 ```bash
-npm exec --no -- fundus figma prepare-set-tag \
-  --file 'https://www.figma.com/design/abc/UI' --node-id 12-34 \
-  --tag navigationPanel --json
+fundus figma prepare-set-tag --file abc --node-id 12-34 --tag coinBadge --json
 ```
 
-1. Choose the tag like any asset id: a stable camelCase name for what the asset is. `--file` takes a file key or link and defaults to `import.figma.defaultFileKey`. `--node-id` takes `12:34` or the `12-34` form from a `node-id` link parameter.
-2. On `{"ok": false, "error": …, "existingTags": […]}` the tag is taken by another node in the file, or a Fundus asset with that id already exists from another source. Pick another name; use `existingTags` (tag, node id, node name, page) to stay consistent with the file's naming. Pass `--force` instead only when the user wants exactly this tag on this node (see the rules below).
-3. On `{"ok": true, "code": …}`, relay every entry in `warnings`, then call `use_figma` with the returned `fileKey` and `code`. Pass `code` **unchanged** — never edit, shorten, or reassemble it. It re-checks every page of the live document before writing, which takes a few seconds on large files.
-4. The script returns `{"ok": true, "nodeId", "nodeName", "tag", "previousTag", "annotated", "movedFrom"}`; `movedFrom` lists the nodes a forced set took the tag from (`nodeId`, `nodeName`, `page`) and is empty otherwise. If it throws instead, it wrote nothing: the document changed since the prepare step. Rerun `prepare-set-tag` rather than retrying the old script.
-5. Import the tagged node: `npm exec --no -- fundus asset ingest --from figma --figma-tag navigationPanel --type slice --json`.
+1. Choose the tag like an asset id: stable camelCase naming what it is. `--file` takes a key or link (default `defaultFileKey`); `--node-id` takes `12:34` or `12-34`. Tag the instance you placed or the node in the main component — never a layer inside an instance (`I12:34;56:78`), which Fundus refuses.
+2. Exit 1 is a refusal; read `error.message`. `--force` overrides the refusals below — use it only for the outcome the user wants, and relay what it did. Anything else (bad id, missing file key, token or fetch failure): fix the input.
 
-Rules to preserve:
+   | Refusal | Without `--force` | With `--force` |
+   | --- | --- | --- |
+   | `existingTags` present: other nodes carry the tag | Pick another name that fits `existingTags` (tag, node id, name, page) | Moves the tag here and clears it, with annotations, from the others (`movedFrom`); its asset resolves here on the next reimport |
+   | `existingTags` present: an asset with that id exists from another source | Pick another name | Tags anyway; only to switch that asset, run the warned `asset replace <id> --from figma --figma-tag <id> --figma-file <key> --scale <n>`, which drops its old source |
+   | Node carries another tag | Keep it | Replaces it; if the old tag feeds an asset, finish with `asset reimport <old> --figma-tag <new>` ([rename](#rename-a-tag-asset)) |
+   | "already carries tag … nothing to do" | Continue with the import | Rewrites it, e.g. to repair its Dev Mode annotation |
 
-- `--force` always sets the tag; without it, each case below is refused. Use it only when the user wants that outcome, and relay what it did:
-  - The node already carries a tag, the same one or another: the tag is rewritten or replaced. When the old tag feeds a Fundus asset, the error and warning name the follow-up `asset reimport <old> --figma-tag <new>`, which renames the asset; update host usages as with any rename.
-  - Other nodes carry the tag: it moves to this node, and the script clears it and its Dev Mode annotation on the others, so a tag stays on exactly one node. A Fundus asset imported from the tag resolves to the new node on its next reimport; the warning says so.
-  - A Fundus asset with that id exists from another source (upload, another node, another file): the node is tagged anyway. The warning names `asset replace <id> --from figma --figma-tag <id> --figma-file <key>`, which switches the asset to the tag and drops its current source; run it only when that is the goal.
-- Tag the instance you placed, or the node inside the main component — never a layer inside an instance (ids starting with `I`, such as `I12:34;56:78`). Those layers mirror the main component's node, including its tag, and Fundus refuses them.
-- A node created moments ago may not be in the REST snapshot yet; the plan then carries a warning and the script verifies the node exists.
-- Each `prepare-set-tag` call plans one node. Tag several new assets with one prepare-and-run pair per node.
+   If `prepare-set-tag --help` does not describe moving tags, the installed Fundus lacks the first two `--force` cases and the migration below.
+3. On `{"ok": true, "fileKey", "code", "warnings", "next", …}`, relay every warning, then call `use_figma` with `fileKey` and `code` **unchanged** — never edit, shorten, or reassemble it. It re-checks the live document before writing (slow on large files).
+4. Relay `previousTag` and `movedFrom` from the script's result. If it throws, nothing was written: rerun `prepare-set-tag`, never the old script.
+5. Import from the same file: `fundus asset ingest --from figma --figma-tag coinBadge --type slice --figma-file abc --json`.
+
+One prepare-and-run pair per node.
 
 ### Move a node-link asset to a tag
 
-An asset imported by node link can move to tag mode without changing its id. Tag its own node with the asset id, then replace the asset from the tag:
+Tag the asset's own node (same file) with the asset id — not a conflict, no `--force` — then replace from the tag with `--scale` set to its current `importSource.parameters.scale` (omitted, it uses `defaults.scale` and resets a slice's `pixelRatio`). The id, type, folder, other parameters, references, and memberships stay.
 
 ```bash
-npm exec --no -- fundus figma prepare-set-tag \
-  --file 'https://www.figma.com/design/abc/UI' --node-id 12-34 \
-  --tag navigationPanel --json
-# run the returned code with use_figma, then:
-npm exec --no -- fundus asset replace navigationPanel --from figma \
-  --figma-tag navigationPanel --figma-file abc --json
+fundus figma prepare-set-tag --file abc --node-id 12-34 --tag navigationPanel --json
+# run the returned code with use_figma
+fundus asset replace navigationPanel --from figma --figma-tag navigationPanel --figma-file abc --scale 2 --json
 ```
 
-The node must be the one the asset is imported from, in the same file; that is not a conflict and needs no `--force`. The plan's warning names the exact `asset replace` command. `asset replace` keeps the id, type, folder, parameters, references, and manifest memberships, so host usages stay valid; do not use `asset ingest`, which would collide with the existing id. Migrate several assets with one prepare, run, and replace sequence per asset. If `prepare-set-tag --help` does not mention moving tags, the host Fundus predates this path and refuses the tag; do not work around it by renaming assets — ask the user to update Fundus.
+A tag replace must use the asset's own id. Never `asset ingest` (the id collides) and never rename assets to get past a refusal.
+
+### Rename a tag asset
+
+The tag is the id, so renaming `navigationPanel` to `mainNavigationPanel` means changing the tag. `asset rename` refuses tag assets, and `reimport --figma-tag <new>` looks up the node that already carries `<new>`, so retag the node first, then reimport. Update host usages of `navigationPanel` in the same task:
+
+```bash
+fundus figma prepare-set-tag --file abc --node-id 12-34 --tag mainNavigationPanel --force --json
+# run the returned code with use_figma
+fundus asset reimport navigationPanel --figma-tag mainNavigationPanel --json
+```
 
 ### Remove a tag
 
-Remove a tag only when the user asked for it:
-
-```bash
-npm exec --no -- fundus figma prepare-delete-tag --tag navigationPanel --json
-```
-
-Identify the node by `--tag` or `--node-id` (both must match when given), then run the returned `code` with `use_figma` the same way. The script removes the tag and its Dev Mode annotation and keeps every other annotation. It is refused without `--force` when a Fundus asset is imported from the tag, because that asset's reimport would fail afterwards.
+Only when asked: `fundus figma prepare-delete-tag --tag navigationPanel --json` (or `--node-id`; both must match if given), then run the returned `code` with `use_figma`. Other annotations stay. It refuses when the tag is on several nodes (pass `--node-id`) or none, and, without `--force`, whenever an asset imports from the tag — even if another node still carries it; disconnecting that asset with a local-file `replace` first avoids breaking its reimport.
 
 ## Declare cross-package dependencies
 
-A package can require the assets a consuming host library must provide — by `id` and `type` only — and derive a typed injection contract. Bytes, parameters, presets, and manifests always stay in the host; a dependency carries nothing but identity and kind.
-
-Declare the dependencies in a `.ts`/`.js` module that default-exports `defineDependencies([...])`, and derive the contract for dependency injection:
+A package can require assets a host must provide, by `id` and `type` only; bytes, parameters, and manifests stay in the host. Declare them in a `.ts`/`.js` module (JSON cannot carry the literal types):
 
 ```ts
 import { defineDependencies, type ManifestContract } from 'fundus/config';
 
 const dependencies = defineDependencies([{ id: 'coin', type: 'slice' }]);
-
-// The contract is the exact, readonly entry map the host must supply.
-export type CoinContract = ManifestContract<typeof dependencies>;
-
+export type CoinContract = ManifestContract<typeof dependencies>; // exact readonly entry map
+export const inject = (manifest: CoinContract) => { /* manifest.coin is a typed slice entry */ };
 export default dependencies;
 ```
 
-Point the host `fundus.config.ts` at dependency sources — a bare npm package name or a path to the module:
+The host passes a generated manifest (`inject(main)`); a manifest lacking `coin` or with the wrong kind is a compile error. A package exposes the module through `package.json`: `{ "fundus": { "dependencies": "./src/fundus.deps.ts" } }`. The host lists sources as bare package names or paths (`.`/`/` prefix or `.ts`/`.js` extension; no package subpaths):
 
 ```ts
-export default defineConfig({
-	// paths and plugins…
-	dependencies: [
-		'@org/other-package', // resolved via that package's package.json "fundus".dependencies
-		'./src/fundus.deps.ts' // or a direct path to a .ts/.js module
-	]
-});
+export default defineConfig({ dependencies: ['@org/other-package', './src/fundus.deps.ts'] });
 ```
 
-An npm dependency exposes its module through `package.json`:
+- Flat: a package's own dependencies are not resolved.
+- Lower bound: extra host assets are fine; a missing id or wrong type is a hard, library-global failure in `check`, `build`, and the editor banner.
+- The same id with conflicting types across sources fails at config load, naming both sources.
+- Validation checks only id and type. `ManifestContract` needs the asset as an explicit member of the manifest the host injects — passive members are never top-level (an asset in no manifest is also an unreachable warning). When a declared id is added or renamed, satisfy it in the host (camelCase id, type, membership) in the same task and run `check`; check an asset's `requiredBy` before renaming or deleting it.
 
-```json
-{ "name": "@org/other-package", "fundus": { "dependencies": "./src/fundus.deps.ts" } }
-```
-
-Rules to preserve:
-
-- Each source is either a bare npm package name or a path (a `.`/`/` prefix or a `.ts`/`.js` extension). An npm subpath such as `@org/pkg/deps.js` is not supported, and JSON is not supported because it cannot carry the literal types the contract needs.
-- Dependencies are flat; a referenced package's own dependencies are not resolved transitively.
-- Dependencies are a lower bound. `check`, `build`, and the editor fail hard when a declared id is missing from the host library or has the wrong type; extra, undeclared host assets are fine. The same id declared with conflicting types across sources fails at config load, naming both sources.
-- An unmet dependency is a library-global issue (no asset id) surfaced in `check`, `build`, and the editor banner, but it never freezes the editor's autosave processing and codegen.
-
-When adding or renaming a declared dependency id, satisfy it in the host library with the matching id and type in the same task, then run `npm exec --no -- fundus check --json`.
-
-## Organize assets and manifests
+## Organize
 
 ```bash
-npm exec --no -- fundus folder create "UI/Settings" --json
-npm exec --no -- fundus asset move settingsPanel "UI/Settings" --json
-npm exec --no -- fundus manifest create settings --json
-npm exec --no -- fundus manifest palette --json
-npm exec --no -- fundus manifest set settings --color blue --emoji '⚙️' --json
+fundus folder create UI --json               # parents must exist
+fundus folder create UI/Settings --json      # always '/' separators
+fundus asset move settingsPanel UI/Settings --json
+fundus manifest create settings --json
+fundus manifest set settings --color blue --emoji '⚙️' --json   # colors: manifest palette
 ```
 
-Asset folders organize persisted raw and proxy files. Manifests control delivery and preloading. Do not substitute one concept for the other.
+Also: `asset delete`, `manifest rename|delete` (a rename replaces the module file and export name), `folder rename|move`, `folder delete --recursive`. An asset in no manifest and unreferenced by a delivered asset is never processed or delivered and fails `check` as unreachable. `folder delete --recursive` does not check references: inspect every asset in the subtree first.
 
-Before renaming or deleting an asset, search host source for its typed manifest-property usages. Before renaming or deleting a manifest, search for its generated module path and exported constant. Apply the CLI mutation and update every host usage in the same task, then run the host typecheck. Fundus validates asset-to-asset references, but it cannot discover imports or property accesses in host source.
+## Build and check
 
-## Build and verify
+`build` processes stale or missing proxies, prunes orphans, and regenerates modules; it does nothing and exits 1 while validation, raw drift, or unmet dependencies fail. `check` additionally requires proxies and modules to match an in-memory regeneration.
 
-```bash
-npm exec --no -- fundus build --json
-npm exec --no -- fundus check --json
-```
+`potential-image-duplicate` is a perceptual match between two `image` assets (e.g. idle and pressed states) and cannot be acknowledged per pair: compare them in the editor, then remove the duplicate or ask the user to accept `--allow-warnings`.
 
-`build` processes stale or missing proxies, prunes orphans, and regenerates manifest modules. `check` is read-only and fails when on-disk derived state is stale or invalid. Warnings fail the check unless the user deliberately accepts `--allow-warnings`.
+Proxy names hash the raw file, parameters, and resolved preset settings, and staleness is a name check. Editing a preset therefore turns every affected proxy `proxy-missing` until `build` (commit the result). Hand-edited proxies are not stale but cause `module-out-of-sync` (and runtime size mismatches); `build` will not restore them — restore them from git, then `build`.
 
-## Handle command results
-
-- Exit `0`: success.
-- Exit `1`: expected usage, validation, or domain error. With `--json`, parse the JSON error or check report from stdout.
-- Exit `2`: unexpected crash. Preserve stderr and report it as a probable Fundus defect.
-
-Do not scrape human output when `--json` is available. Do not guess flags or parameter schemas; consult the focused help and the current state or preset names.
+Deleting: `usage --unused` lists only conclusively unused assets (`unknown` is not unused). `asset delete` removes the record, raw original, and proxies, recoverable only from git; `folder delete --recursive` deletes every asset in the subtree. Present candidates to the user and delete only what they confirm.

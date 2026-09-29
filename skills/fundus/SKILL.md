@@ -1,71 +1,45 @@
 ---
 name: fundus
-description: Use Fundus to import, replace, reimport, organize, process, validate, preload, and render production assets in Svelte 5 mobile app projects that already declare Fundus, contain fundus.config.ts, or are explicitly adopting Fundus. Use for Fundus setup, asset libraries, local files, Figma selection sources, Figma tag references, tagging Figma nodes through the Figma MCP, images, slices, video, chroma-key video, audio, manifests, generated modules, cross-package asset dependencies and dependency-injection contracts, the Fundus CLI or editor, runtime components, retained entries, canvas and WebGL drawing, delivery budgets, and preload lifecycles.
+description: Operate Fundus (CLI, editor, runtime) in SvelteKit/Svelte 5 projects that declare Fundus, contain fundus.config.ts, or are adopting it. Use to set up Fundus; ingest, replace, reimport, and organize production assets from local files or Figma nodes and tags (including tagging via the Figma MCP); manage manifests, generated modules, and cross-package asset dependencies; validate; and preload or render images, slices, video, chroma-key video, and audio with components, canvas, or WebGL within mobile delivery budgets.
 ---
 
 # Fundus
 
-Manage a Svelte mobile app's production assets through Fundus while preserving its deterministic, typed asset pipeline.
+Fundus turns raw originals into processed proxies and typed, generated manifest modules. Keep that pipeline deterministic and let the CLI own every mutation.
 
-## Start from project state
+## Start
 
-Run Fundus commands from the host project root, next to `fundus.config.ts`.
+1. Work in the package that contains `fundus.config.ts` (a monorepo lockfile may sit at the root). Require Node.js 20.19+, SvelteKit with Svelte 5, and `fundus` as a runtime dependency of that package, not the workspace root.
+2. Run the CLI only through the local runner — npm: `npm exec --no -- fundus`, pnpm: `pnpm exec fundus`, yarn: `yarn fundus` (unless a `fundus` package script shadows it) — and confirm `fundus --version` matches `node_modules/fundus/package.json`. Never let a runner download Fundus (`npx fundus`, `pnpm dlx`); read `npx fundus` in help texts as your runner. Below, `fundus` means that runner.
+3. Read `fundus.config.ts` and any dependency modules it lists before the first command: loading them executes host code.
+4. Setup, only when requested: install `fundus` in that package (`npm install fundus`, `pnpm add fundus`), then follow [Set up](references/cli.md#set-up).
+5. Read state with `fundus state --json`. For a large library, write it to a temp file outside the repo and `jq` only the relevant records.
 
-1. Detect the host package manager from its lockfile. Confirm Node.js 20.19 or newer, Svelte 5, and a runtime dependency on `fundus` before executing the CLI.
-2. If Fundus is missing and the user explicitly requested setup, install it with the host package manager, for example `npm install fundus`. Do not rely on an executor downloading Fundus temporarily.
-3. Use the package manager's local-only runner for every command. With npm, use `npm exec --no -- fundus`; `--no` prevents a missing local package from falling back to a registry download.
-4. Inspect `fundus.config.ts` before running it because it is executable TypeScript.
-5. If the config exists, inspect project state with `npm exec --no -- fundus state --json`. For a large library, capture the JSON in a temporary file outside the repository and use `jq` to read only the assets or manifests relevant to the task.
-6. If the config does not exist and setup was requested, run `npm exec --no -- fundus init --json` once after installation.
-7. Read focused command help before using unfamiliar flags, for example `npm exec --no -- fundus asset ingest --help`.
+The installed CLI's `--help` and JSON output, and the installed runtime types, are the contract. Read focused help before unfamiliar flags. If help lacks a command or flag described here, the installed Fundus predates it: never guess, emulate, or work around it — ask the user to update. Pass `--json` to every command except the interactive editor, `fundus start`.
 
-Use JSON output for agent-driven work. Treat the installed CLI's help and JSON responses as the authoritative contract.
+## Rules
 
-## Preserve the asset pipeline
+- **Inputs vs derived.** Raw originals, the library, `fundus.config.ts`, and dependency modules are inputs; proxies and generated modules are derived. Never hand-edit derived files or the library JSON — CLI mutations validate, persist, process, and regenerate in one step. Keep formatters and lint-staged off the library and `manifestsDir` (`check` needs byte-identical modules). Commit all of it. Only for a VCS merge conflict, merge the library JSON by hand, take either side of generated modules, then `build` and `check`.
+- **Files enter only through the CLI.** Ingest or replace from a path outside the raw directory (ingesting a file already inside it makes a renamed copy); never add, edit, move, or delete files inside it. Edited, missing, or moved raw files block `build` and processing; unmanaged new files are silently skipped by `build`; both fail `check` unconditionally. Prefer restoring the exact original from git; the editor's ingestion queue also resolves drift, but disconnects Figma sources, and "process" resets parameters.
+- **One writer.** Run mutations strictly one at a time — no parallel shells or concurrent tool calls; there is no cross-process lock — and never while the editor is changing the same project (ask the user to close it). Suggest the editor for visual authoring (slice insets, chroma-key tuning); do agent work through the CLI.
+- **Read results, not just exit codes.** Exit 0 means the change was written, but non-empty `issues` means the project is unhealthy: existing validation errors or raw drift skip processing and codegen, `Processing failed: …` means processing broke, and unmet dependencies block `build` and `check`. Fix them before continuing. Exit 1 is a rejected command (nothing written): read the JSON on stdout — `error.message`, or for `check` its `errors` and `warnings` (`advisories` are non-fatal). Exit 2 is a crash: keep stderr and report a probable Fundus defect (or a host config or dependency-module bug).
+- **Stable IDs.** Update assets in place with `reimport` or `replace`, never delete-and-ingest. Prefer Figma **tags** over node links. Ids and manifest names are camelCase (`^[a-z][A-Za-z0-9]*$`) and never `preload`, `release`, `entries`, `prototype`, or `Object.prototype` members (`constructor`, `toString`, …). Never name a manifest after a JS reserved word: Fundus accepts it, but the generated `export const` breaks the host build. A manifest's module is its kebab-case name: `mainCatalog` → `main-catalog.generated.ts`.
+- **Figma tags are written by a generated script.** Agents run `fundus figma prepare-set-tag` and pass its `code` unchanged to the Figma MCP `use_figma` tool. Never hand-write `use_figma` code that touches `fundus` plugin data.
+- **Renames and deletions reach host code.** Delete assets, folders, manifests, or tags only when the user asked. Fundus refuses to rename, retag, or delete an asset another asset references: clear the reference with `asset set`, rename, then re-point it. It cannot see host code, so before renaming or deleting an asset or manifest, find host usages — `fundus usage <id> --json` if configured, and a search for the module path, export names, and property accesses when it isn't or reports `unknown` — then update them in the same task and run `check` and the host typecheck.
+- **Validate.** When files, config, or generated output may be stale, run `fundus build --json`; then `fundus check --json` (read-only). Warnings fail it; pass `--allow-warnings` only if the user accepts them. After a Fundus upgrade, read its GitHub release notes (github.com/grischaerbe/fundus; the changelog is not in `node_modules`) for breaking changes such as server-plugin APIs, then `build`, `check`, and commit the regenerated modules.
 
-- Treat raw originals, the Fundus library, and `fundus.config.ts` as inputs.
-- Never hand-edit processed proxies or generated manifest modules. Change their inputs and regenerate them.
-- Prefer stable asset IDs. Refresh an existing repeatable source with `asset reimport`. Use `asset replace` to keep identity and metadata while establishing a new authoritative source: a local file disconnects provenance, while `--from figma` stores a new repeatable Figma source.
-- Prefer a Figma **tag** over a raw node id for repeatable Figma sources. A tag is a stable Fundus asset id stored on the node as shared plugin data (`fundus/assetId`); it survives node moves and file copies. In tag mode the tag is the asset id, so renaming means changing the tag, not the id.
-- Tag Figma nodes yourself when you create or place them: designers use the Fundus Figma plugin, agents use `fundus figma prepare-set-tag` and run the returned script unchanged with the Figma MCP `use_figma` tool. Never write `fundus` plugin data with hand-written `use_figma` code. Read [Tag Figma nodes from an agent](references/cli.md#tag-figma-nodes-from-an-agent).
-- Move a node-link asset to a tag by tagging its own node with the asset id and then running `asset replace <id> --from figma --figma-tag <id>`; never rename assets to get past a refusal. Read [Move a node-link asset to a tag](references/cli.md#move-a-node-link-asset-to-a-tag).
-- Use Fundus CLI mutations instead of editing the library JSON directly. Mutations validate, persist, process affected assets, and regenerate manifests as one operation.
-- Inspect Fundus references and search host source before renaming or deleting an asset or manifest. Update generated-module imports, manifest export names, and typed asset-property usages in the same task.
-- Do not perform destructive asset, folder, or manifest deletion unless the user requested it.
-- Run `npm exec --no -- fundus check --json` after changes. Run `npm exec --no -- fundus build --json` first when files, configuration, or generated output may be stale.
-- Report warnings and validation issues. Do not leave known host import or type errors for the user to repair manually.
+Read [references/cli.md](references/cli.md) before ingesting, updating, tagging, organizing, or declaring dependencies.
 
-## Design for mobile delivery
+## Mobile delivery
 
-- Treat manifests as delivery units and preload groups, not merely folders.
-- Group assets by the screen, route, overlay, or interaction flow that needs them. Avoid one catch-all manifest when it inflates startup cost.
-- Record manifest membership and `deliveredBytes` before and after delivery changes with `npm exec --no -- fundus manifest list --json`; report the byte delta.
-- Account for passive members pulled into a manifest through asset references.
-- Give each preloaded manifest one lifecycle owner. Multiple `preload()` calls on the same generated manifest do not create independent holds, so never let repeated component instances each call `release()` independently. Per-instance consumers hold entries individually instead: Svelte components construct `new RetainedEntry(entry)` during initialisation, which holds until destroy; other code uses `retainEntry(entry)`, where every handle is its own hold with its own `release()`.
-- Preload shortly before a screen or flow becomes interactive, handle rejection explicitly, and release only after the final consumer is gone.
-- Prefer `Slice` for stretchable mobile UI surfaces instead of shipping multiple fixed-size variants. Size its box with `sliceLayoutGeometry(entry)`, never from `sourceWidth`; read [Size slice boxes](references/mobile-workflows.md#size-slice-boxes).
-- For an existing canvas, pass a `RetainedEntry` (inside a `$effect`, once its `source` is set) or an `await retainEntry(entry)` handle to synchronous `drawSlice()` or `drawImage()`; release a `retainEntry` handle after the final draw. For WebGL or Pixi, combine the handle's `source` with `sliceGrid()`. Read [Retain entries](references/mobile-workflows.md#retain-individual-entries), [Canvas rendering](references/mobile-workflows.md#draw-into-an-existing-canvas), and [Custom renderers](references/mobile-workflows.md#render-with-webgl-or-pixi).
-- Keep original source quality in raw assets and tune delivered proxies through Fundus parameters and presets.
+Manifests are delivery and preload units; folders only organize files. Capture `fundus manifest list --json` before and after changes (passive members pulled in by references count) and report each `deliveredBytes` delta.
 
-Read [references/mobile-workflows.md](references/mobile-workflows.md) when planning manifest boundaries, runtime loading, rendering, or mobile asset budgets.
+Generated manifests are singletons: repeated `preload()` calls share one hold, so give each one lifecycle owner and never let repeated component instances each `release()`. Per-consumer holds use `new RetainedEntry(entry)` in components, `retainEntry(entry)` elsewhere.
 
-## Share assets across packages with dependencies
+Read [references/mobile-workflows.md](references/mobile-workflows.md) before planning manifests or preloading, or rendering with components, slices, audio, canvas, or WebGL/Pixi.
 
-- A package declares the assets a consuming host must provide with `defineDependencies([{ id, type }, …])` from `fundus/config`, and derives a typed injection contract with `ManifestContract<typeof deps>`. A dependency carries identity and kind only — bytes, parameters, presets, and manifests always live in the host library.
-- The host lists dependency sources in `fundus.config.ts` under `dependencies`: a bare npm package name (resolved through that package's `package.json` `"fundus".dependencies` module path) or a path to a `.ts`/`.js` module that default-exports `defineDependencies([...])`. JSON is unsupported because it cannot carry the literal types the contract needs.
-- Dependencies are flat (not resolved transitively) and are a lower bound: extra host assets are fine, but a declared id that is missing or has the wrong type is a hard, library-global failure in `check`, `build`, and the editor banner. Conflicting types for the same id across sources fail at config load, naming both sources.
-- Treat dependency modules as inputs. When adding or renaming a declared id, satisfy it in the host library (correct id and type) in the same task, then run `npm exec --no -- fundus check --json`. An unmet dependency is surfaced but never freezes the editor's autosave processing and codegen.
-- Read [references/cli.md](references/cli.md) for the concrete declaration and config wiring.
+## Finish
 
-## Operate through the CLI
-
-Use the visual editor for authoring that benefits from direct preview, such as slice insets, chroma-key tuning, or browsing a large library. Use the CLI for repeatable agent work, batch inspection, CI, and precise mutations.
-
-Read [references/cli.md](references/cli.md) before ingesting, mutating, organizing, or validating assets.
-
-## Finish the task
-
-1. Run `npm exec --no -- fundus check --json`.
-2. Run the host project's relevant typecheck, tests, or build when generated imports or runtime rendering changed.
-3. Run `git status --short --untracked-files=all` before reviewing the diff so new raw assets and generated files are included. Review the library, proxies, and generated modules as well as tracked changes.
-4. Summarize changed asset IDs, manifest membership, delivered-size impact, warnings, and checks run.
+1. `fundus check --json`, plus the host typecheck, tests, or build when generated imports or rendering changed.
+2. `git status --short --untracked-files=all`, then review the diff, including new raw files, the library, proxies, and generated modules.
+3. Summarize changed asset IDs, manifest membership, delivered-size deltas, warnings, and checks run.
