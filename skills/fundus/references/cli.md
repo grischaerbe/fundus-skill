@@ -57,7 +57,7 @@ Read `asset.importSource` in `asset show --json` first. A Figma source (`importe
 | Any Image/Slice | Switch to its own tag | [Move a node-link asset to a tag](#move-a-node-link-asset-to-a-tag) |
 | Any | New local file | `asset replace <id> <file>` |
 
-- A plain `reimport` re-resolves the saved source (a tag re-scans its file, so it survives node moves). Overrides keep omitted values. Node-link assets reject `--figma-tag`/`--figma-file`; tag assets reject `--figma-link`.
+- A plain `reimport` re-resolves the saved source. A tag survives node moves: Fundus 0.28.2+ first checks the last resolved node and re-scans the file only if that node no longer carries the tag; older versions always re-scan, which can time out on large files. Overrides keep omitted values. Node-link assets reject `--figma-tag`/`--figma-file`; tag assets reject `--figma-link`.
 - `replace` keeps the id, type, parameters, references, folder, and memberships. A local file makes local bytes authoritative and ends refreshes; a Figma replace installs a new refreshable source.
 - **Slice `pixelRatio`:** a Figma replace, and a reimport with any flag — even `--figma-file` alone — resets it to the export scale; only a flagless reimport keeps it. Other parameters are kept. Inspect the returned asset before more parameter changes.
 - `reimport` and Figma `replace` abort instead of overwriting drift in their own raw file or a concurrent change.
@@ -91,7 +91,7 @@ fundus asset ingest 'https://www.figma.com/design/abc/UI?node-id=12-34' \
 fundus asset ingest --from figma --figma-tag navigationPanel --type slice --figma-file abc --json
 ```
 
-A **tag** is an asset id stored on a node as shared plugin data (`fundus/assetId`) and resolved at import time, so it survives node moves and file copies; node ids do not. Designers set tags with the Fundus Figma plugin; agents use the flow below. A reimport fails with "More than one Figma node is tagged" when a designer duplicated a tagged node. `prepare-delete-tag --tag <tag> --json` refuses but lists the carrying nodes; then `prepare-set-tag --force` on the right node moves the tag off the copies.
+A **tag** is an asset id stored on a node as shared plugin data (`fundus/assetId`) and resolved at import time, so it survives node moves and file copies; node ids do not. Designers set tags with the Fundus Figma plugin; agents use the flow below. A file scan fails with "More than one Figma node is tagged" when a designer duplicated a tagged node. Tag ingest, `replace`, and `reimport` with any flag always scan; from 0.28.2 a flagless `reimport` keeps its last resolved node while it still carries the tag, so it does not notice the copies. `prepare-delete-tag --tag <tag> --json` refuses but lists the carrying nodes; then `prepare-set-tag --force` on the right node moves the tag off the copies.
 
 ## Tag Figma nodes from an agent
 
