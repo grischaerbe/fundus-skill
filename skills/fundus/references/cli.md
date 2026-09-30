@@ -57,14 +57,14 @@ Read `asset.importSource` in `asset show --json` first. A Figma source (`importe
 | Any Image/Slice | Switch to its own tag | [Move a node-link asset to a tag](#move-a-node-link-asset-to-a-tag) |
 | Any | New local file | `asset replace <id> <file>` |
 
-- A plain `reimport` re-resolves the saved source. A tag survives node moves: Fundus 0.28.2+ first checks the last resolved node and re-scans the file only if that node no longer carries the tag; older versions always re-scan, which can time out on large files. Overrides keep omitted values. Node-link assets reject `--figma-tag`/`--figma-file`; tag assets reject `--figma-link`.
+- A plain `reimport` re-resolves the saved source; a tag asset looks up the node carrying its tag again, so it follows node moves. Overrides keep omitted values. Node-link assets reject `--figma-tag`/`--figma-file`; tag assets reject `--figma-link`.
 - `replace` keeps the id, type, parameters, references, folder, and memberships. A local file makes local bytes authoritative and ends refreshes; a Figma replace installs a new refreshable source.
 - **Slice `pixelRatio`:** a Figma replace, and a reimport with any flag — even `--figma-file` alone — resets it to the export scale; only a flagless reimport keeps it. Other parameters are kept. Inspect the returned asset before more parameter changes.
 - `reimport` and Figma `replace` abort instead of overwriting drift in their own raw file or a concurrent change.
 
 ## Figma sources
 
-Configure Figma only when the user asked. The token needs `file_content:read` and lives in a server-side environment variable — never commit, print, persist, or pass it as an argument, and recommend rotating one pasted into chat. `build` and `check` need no token. The first Figma import upgrades the library to version 2, which older Fundus cannot open:
+Configure Figma only when the user asked. The token needs `file_content:read` and `file_dev_resources:read`, plus `file_dev_resources:write` for `fundus figma set-tag`/`delete-tag`. It lives in a server-side environment variable — never commit, print, persist, or pass it as an argument, and recommend rotating one pasted into chat. A 403 names the missing scope. `build` and `check` need no token:
 
 ```ts
 export default defineConfig({
@@ -91,40 +91,37 @@ fundus asset ingest 'https://www.figma.com/design/abc/UI?node-id=12-34' \
 fundus asset ingest --from figma --figma-tag navigationPanel --type slice --figma-file abc --json
 ```
 
-A **tag** is an asset id stored on a node as shared plugin data (`fundus/assetId`) and resolved at import time, so it survives node moves and file copies; node ids do not. Designers set tags with the Fundus Figma plugin; agents use the flow below. A file scan fails with "More than one Figma node is tagged" when a designer duplicated a tagged node. Tag ingest, `replace`, and `reimport` with any flag always scan; from 0.28.2 a flagless `reimport` keeps its last resolved node while it still carries the tag, so it does not notice the copies. `prepare-delete-tag --tag <tag> --json` refuses but lists the carrying nodes; then `prepare-set-tag --force` on the right node moves the tag off the copies.
+A **tag** is an asset id attached to a node as a Dev Resources link (`https://fundus.invalid/asset/<tag>`, named `Fundus: <tag>`). Fundus lists the file's links at import time, so a tag survives node moves and file duplication; node ids do not. Pasting a node into another file drops its tag: tag it again there. Designers set tags with the Fundus Figma plugin; agents use the flow below. Cmd+D in Figma copies the link, so a duplicated node makes the tag fail with `ambiguous-tag` ("More than one Figma node is tagged"): `set-tag --force` on the node that should keep it removes the tag from the copies.
 
 ## Tag Figma nodes from an agent
 
-The Figma REST API cannot write plugin data, so Fundus prepares a script and the agent runs it with the Figma MCP `use_figma` tool (which needs write access; the Fundus token needs only read).
+`fundus figma set-tag` checks the request against the file's links and the library, then writes the link over the REST API. No Figma MCP is involved.
 
 ```bash
-fundus figma prepare-set-tag --file abc --node-id 12-34 --tag coinBadge --json
+fundus figma set-tag --file abc --node-id 12-34 --tag coinBadge --json
 ```
 
-1. Choose the tag like an asset id: stable camelCase naming what it is. `--file` takes a key or link (default `defaultFileKey`); `--node-id` takes `12:34` or `12-34`. Tag the instance you placed or the node in the main component — never a layer inside an instance (`I12:34;56:78`), which Fundus refuses.
-2. Exit 1 is a refusal; read `error.message`. `--force` overrides the refusals below — use it only for the outcome the user wants, and relay what it did. Anything else (bad id, missing file key, token or fetch failure): fix the input.
+1. Choose the tag like an asset id: stable camelCase naming what it is. `--file` takes a key or link (default `defaultFileKey`); `--node-id` takes `12:34` or `12-34`. Tag the instance you placed or the node in the main component — never a layer inside an instance (`I12:34;56:78`), a page, or the document, which Fundus refuses.
+2. A node that already carries the tag is left as is (success, nothing written). Exit 1 with `existingTags` is a refusal; read `error.message`. `--force` overrides the refusals below — use it only for the outcome the user wants, and relay what it did. Anything else (bad id, missing or deleted node, missing file key, token or fetch failure): fix the input.
 
    | Refusal | Without `--force` | With `--force` |
    | --- | --- | --- |
-   | `existingTags` present: other nodes carry the tag | Pick another name that fits `existingTags` (tag, node id, name, page) | Moves the tag here and clears it, with annotations, from the others (`movedFrom`); its asset resolves here on the next reimport |
-   | `existingTags` present: an asset with that id exists from another source | Pick another name | Tags anyway; only to switch that asset, run the warned `asset replace <id> --from figma --figma-tag <id> --figma-file <key> --scale <n>`, which drops its old source |
+   | Other nodes carry the tag | Pick another name that fits `existingTags` (tag, node id, node name) | Removes the tag from the others (`movedFrom`) and keeps it on this node; its asset resolves here on the next reimport |
+   | An asset with that id exists from another source | Pick another name | Tags anyway; only to switch that asset, run the warned `asset replace <id> --from figma --figma-tag <id> --figma-file <key> --scale <n>`, which drops its old source |
    | Node carries another tag | Keep it | Replaces it; if the old tag feeds an asset, finish with `asset reimport <old> --figma-tag <new>` ([rename](#rename-a-tag-asset)) |
-   | "already carries tag … nothing to do" | Continue with the import | Rewrites it, e.g. to repair its Dev Mode annotation |
 
-   If `prepare-set-tag --help` does not describe moving tags, the installed Fundus lacks the first two `--force` cases and the migration below.
-3. On `{"ok": true, "fileKey", "code", "warnings", "next", …}`, relay every warning, then call `use_figma` with `fileKey` and `code` **unchanged** — never edit, shorten, or reassemble it. It re-checks the live document before writing (slow on large files).
-4. Relay `previousTag` and `movedFrom` from the script's result. If it throws, nothing was written: rerun `prepare-set-tag`, never the old script.
+3. On `{"ok": true, "nodeId", "tag", "previousTag", "movedFrom", "warnings", "next"}`, relay every warning and `next`. The node's annotation appears once someone opens its page in the Fundus Figma plugin; never write it yourself.
+4. A failed write exits 1 with `written` and `notWritten`: nothing was lost (the new link is written first). Rerun the same command to finish.
 5. Import from the same file: `fundus asset ingest --from figma --figma-tag coinBadge --type slice --figma-file abc --json`.
 
-One prepare-and-run pair per node.
+Tag one node per command. Figma throttles rapid writes; on a rate-limit error, stop and tell the user.
 
 ### Move a node-link asset to a tag
 
-Tag the asset's own node (same file) with the asset id — not a conflict, no `--force` — then replace from the tag with `--scale` set to its current `importSource.parameters.scale` (omitted, it uses `defaults.scale` and resets a slice's `pixelRatio`). From 0.28 the follow-up that `prepare-set-tag` warns with already carries it; older versions omit it. The id, type, folder, other parameters, references, and memberships stay.
+Tag the asset's own node (same file) with the asset id — not a conflict, no `--force` — then replace from the tag with `--scale` set to its current `importSource.parameters.scale` (omitted, it uses `defaults.scale` and resets a slice's `pixelRatio`). The follow-up that `set-tag` warns with already carries it. The id, type, folder, other parameters, references, and memberships stay.
 
 ```bash
-fundus figma prepare-set-tag --file abc --node-id 12-34 --tag navigationPanel --json
-# run the returned code with use_figma
+fundus figma set-tag --file abc --node-id 12-34 --tag navigationPanel --json
 fundus asset replace navigationPanel --from figma --figma-tag navigationPanel --figma-file abc --scale 2 --json
 ```
 
@@ -135,14 +132,13 @@ A tag replace must use the asset's own id. Never `asset ingest` (the id collides
 The tag is the id, so renaming `navigationPanel` to `mainNavigationPanel` means changing the tag. `asset rename` refuses tag assets, and `reimport --figma-tag <new>` looks up the node that already carries `<new>`, so retag the node first, then reimport. Update host usages of `navigationPanel` in the same task:
 
 ```bash
-fundus figma prepare-set-tag --file abc --node-id 12-34 --tag mainNavigationPanel --force --json
-# run the returned code with use_figma
+fundus figma set-tag --file abc --node-id 12-34 --tag mainNavigationPanel --force --json
 fundus asset reimport navigationPanel --figma-tag mainNavigationPanel --json
 ```
 
 ### Remove a tag
 
-Only when asked: `fundus figma prepare-delete-tag --tag navigationPanel --json` (or `--node-id`; both must match if given), then run the returned `code` with `use_figma`. Other annotations stay. It refuses when the tag is on several nodes (pass `--node-id`) or none, and, without `--force`, whenever an asset imports from the tag — even if another node still carries it; disconnecting that asset with a local-file `replace` first avoids breaking its reimport.
+Only when asked: `fundus figma delete-tag --tag navigationPanel --json` (or `--node-id`; both must match if given). It refuses when the tag is on several nodes (pass `--node-id`), when a node carries several tags and only `--node-id` is given (pass `--tag`), when no existing node carries it, and, without `--force`, when an asset imports from the tag and no other node keeps it; disconnecting that asset with a local-file `replace` first avoids breaking its reimport. The Fundus Figma plugin removes the annotation once it opens the node's page.
 
 ## Declare cross-package dependencies
 
