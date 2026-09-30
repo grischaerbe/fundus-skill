@@ -1,7 +1,5 @@
 # Svelte mobile asset workflows
 
-Before 0.25 the `retainEntry` handle type was named `RetainedEntry` (now `EntryHandle`), and before 0.24 drawing helpers took raw entries.
-
 ## Plan delivery
 
 Model manifests on when the user's journey needs assets: a small startup manifest for the shell and first interactive screen, route or feature manifests for later screens, and flow manifests for short-lived experiences (onboarding, checkout, a game level). A shared asset belongs to the manifest of its earliest required moment, or ships passively with an asset that references it. Keep video and audio out of startup unless the first interaction needs them. Split a manifest when unrelated screens pay for its assets; merge manifests that always load together. `deliveredBytes` counts only current proxies, so `build` before measuring.
@@ -64,7 +62,7 @@ Import components and generated entries; never assemble proxy URLs. Components l
 
 - **Three-slice:** the cross axis (`height` for `three-horizontal`, `width` for `three-vertical`) is a hard constraint; caps keep their aspect ratio only at that size. The along-axis value is a reference; fixing the element to it defeats the slice.
 - **Nine-slice:** both values are references; any size works.
-- **Versions:** since 0.22. Before 0.28 it returns the compressed size of compressed slices; from 0.28 it returns the uncompressed size.
+- **Compressed slices:** it returns the uncompressed size.
 
 ## Retain individual entries
 
