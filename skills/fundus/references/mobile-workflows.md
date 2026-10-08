@@ -71,7 +71,7 @@ Two APIs hold one entry's file, sharing loads with manifests and each other:
 - `new RetainedEntry(entry)` — Svelte class; the hold follows the constructing component.
 - `retainEntry(entry)` — resolves to an `EntryHandle` (`entry`, `source`, `release()`) for code outside component lifecycles.
 
-`source` is `HTMLImageElement | ImageBitmap` for images and slices, and a playable object URL over the fully fetched file for video, chroma-key video, and audio. A chroma-key video retains only its video; retain `mask` or `fallback` separately. An already preloaded or in-flight asset is shared, not refetched; a retain after `manifest.preload()` resolves without loading but is still its own hold. Both `release()`s are idempotent and safe to pass unbound.
+`source` is a decoded `HTMLImageElement` for images and slices, and a playable object URL over the fully fetched file for video, chroma-key video, and audio. A chroma-key video retains only its video; retain `mask` or `fallback` separately. An already preloaded or in-flight asset is shared, not refetched; a retain after `manifest.preload()` resolves without loading but is still its own hold. Both `release()`s are idempotent and safe to pass unbound.
 
 ### In components
 
@@ -123,10 +123,11 @@ panel.release();
 logo.release();
 ```
 
-- **Readiness:** drawing never waits or loads. Keep the hold for every frame; drawing without a loaded source (released, or a `RetainedEntry` still loading) throws, even for an empty box. Held images and slice bitmaps stay decoded in memory — budget that as well as bytes.
+- **Readiness:** drawing never waits or loads. Keep the hold for every frame; drawing without a loaded source (released, or a `RetainedEntry` still loading) throws, even for an empty box. Held images and slices stay decoded in memory — budget that as well as bytes.
 - **Units:** `(x, y)` is the box's top-left in the context's current units. Rely on the host's DPR transform; never multiply by DPR again. Fundus never resizes or clears the canvas or changes transform, clipping, alpha, compositing, or smoothing; sizing the canvas is the host's job: CSS size = logical box, backing store = CSS size × DPR (rounded); resizing clears it.
 - **Pixel ratio:** a slice's `slicing.pixelRatio` fixes logical border sizes (20 source px at @2x = 10 units); do not divide the destination size by it. Three-slice caps scale with the cross axis. Images have no pixel ratio and stretch to the box.
 - **Overdraw:** the box is the slice's core; baked-in overdraw paints outside it, including above/left of `(x, y)`. Leave room in the canvas and any clip. Fractional sizes or transforms can antialias cell seams.
+- **Backgrounding:** WebKit on iOS can drop a canvas' pixels while the app is in the background. Redraw when `document.visibilityState` turns `visible` and on `pageshow`; `<Slice>` does this itself.
 - Non-positive width/height is a no-op; non-finite values throw.
 
 ## Render with WebGL or Pixi
@@ -136,7 +137,7 @@ Fundus ships no renderer adapter. Build one from a retained entry's `source` and
 - **Cells:** paint cell `(c, r)` only when all four spans are positive (`sourceX[c+1] > sourceX[c]`, same for `sourceY`, `destX`, `destY`). This handles three-slice, one-slice, and insets without a center.
 - **UVs:** source edges ÷ `entry.sourceWidth`/`sourceHeight`. A 4×4 vertex mesh works if the index buffer omits skipped cells (otherwise a zero-width span stretches a texel column). On resize, recompute positions and indices.
 - **Units:** pass device pixels for seam-free edges. Overdraw and boxes smaller than the fixed borders put edges outside the box.
-- **Alpha:** upload with `UNPACK_PREMULTIPLY_ALPHA_WEBGL = true`; slice bitmaps are already premultiplied, so every texture ends up premultiplied.
+- **Alpha:** upload with `UNPACK_PREMULTIPLY_ALPHA_WEBGL = true` so every texture ends up premultiplied.
 - **Lifetime:** keep the handle while the renderer may re-upload (context loss, texture GC); destroy textures before releasing. After the last release a new handle gets a new source object, so don't cache by source identity across releases.
-- **Origin:** retained elements have no `crossOrigin`; cross-origin proxies cannot be uploaded from images or one-slices.
+- **Origin:** retained elements have no `crossOrigin`; cross-origin proxies cannot be uploaded.
 - **Images:** a textured quad; no grid.
